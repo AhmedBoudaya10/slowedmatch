@@ -1379,6 +1379,24 @@ a.track-title:hover {
   background: rgba(19, 21, 27, 0.7);
 }
 
+.lib-card.pinned {
+  border-color: rgba(124, 58, 237, 0.55);
+  background: linear-gradient(160deg, rgba(124, 58, 237, 0.08), rgba(15, 17, 22, 0.55));
+}
+
+.lib-pin-flag {
+  position: absolute;
+  top: 8px;
+  left: 12px;
+  z-index: 1;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--accent-2);
+  pointer-events: none;
+}
+
 .lib-open {
   display: flex;
   align-items: center;
@@ -1444,7 +1462,8 @@ a.track-title:hover {
   text-overflow: ellipsis;
 }
 
-.lib-remove {
+.lib-remove,
+.lib-pin {
   position: absolute;
   top: 6px;
   right: 6px;
@@ -1452,8 +1471,25 @@ a.track-title:hover {
   transition: opacity 0.15s ease;
 }
 
+.lib-pin {
+  right: 34px;
+}
+
+.lib-pin.on,
+.lib-pin svg {
+  color: var(--muted-2);
+}
+
+.lib-pin.on svg {
+  fill: var(--accent-2);
+  color: var(--accent-2);
+}
+
 .lib-card:hover .lib-remove,
-.lib-remove:focus-visible {
+.lib-card:hover .lib-pin,
+.lib-remove:focus-visible,
+.lib-pin:focus-visible,
+.lib-pin.on {
   opacity: 1;
 }
 
@@ -1847,7 +1883,8 @@ body:has(.playerbar) .footer {
     background: rgba(7, 8, 10, 0.22);
   }
 
-  .lib-remove {
+  .lib-remove,
+  .lib-pin {
     opacity: 1;
     background: rgba(11, 13, 17, 0.6);
   }

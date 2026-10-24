@@ -88,6 +88,7 @@ export type SavedEntity = {
   cover?: string;
   trackCount: number;
   at: number;
+  pinned?: boolean;
 };
 
 const LIBRARY_KEY = `${NS}:library`;
@@ -118,6 +119,14 @@ export function saveToLibrary(
 
 export function removeFromLibrary(id: string): SavedEntity[] {
   const list = getLibrary().filter((item) => item.id !== id);
+  write(LIBRARY_KEY, list);
+  return list;
+}
+
+export function togglePin(id: string): SavedEntity[] {
+  const list = getLibrary().map((item) =>
+    item.id === id ? { ...item, pinned: !item.pinned } : item,
+  );
   write(LIBRARY_KEY, list);
   return list;
 }

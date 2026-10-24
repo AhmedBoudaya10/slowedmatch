@@ -21,6 +21,7 @@ import {
   setCachedPlaylist,
   toCsv,
   toJson,
+  togglePin,
   type SavedEntity,
 } from "@/lib/client";
 import TrackRow from "@/components/TrackRow";
@@ -29,6 +30,7 @@ import {
   ArrowUpIcon,
   ChevronDownIcon,
   CloseIcon,
+  PinIcon,
   PlayIcon,
   SearchIcon,
   WaveformIcon,
@@ -463,6 +465,14 @@ export default function Home() {
     setPlayer(null);
   };
 
+  const sortedLibrary = useMemo(
+    () =>
+      [...library].sort(
+        (a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)),
+      ),
+    [library],
+  );
+
   return (
     <>
       <a className="skip-link" href="#tracks">
@@ -562,8 +572,11 @@ export default function Home() {
                 </span>
               </div>
               <div className="library-grid">
-                {library.map((entity) => (
-                  <div className="lib-card" key={entity.id}>
+                {sortedLibrary.map((entity) => (
+                  <div
+                    className={`lib-card${entity.pinned ? " pinned" : ""}`}
+                    key={entity.id}
+                  >
                     <button
                       type="button"
                       className="lib-open"
@@ -573,8 +586,14 @@ export default function Home() {
                         void runPlaylist(entity.url);
                       }}
                       disabled={resolving || running}
+                      aria-label={`Find matches for ${entity.name}`}
                       title={`Find matches for ${entity.name}`}
                     >
+                      {entity.pinned && (
+                        <span className="lib-pin-flag" aria-hidden="true">
+                          Pinned
+                        </span>
+                      )}
                       {entity.cover ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img src={entity.cover} alt="" loading="lazy" width={64} height={64} />
@@ -586,9 +605,19 @@ export default function Home() {
                         <span className="lib-name">{entity.name}</span>
                         <span className="lib-sub">
                           {entity.owner ? `${entity.owner} · ` : ""}
-                          {entity.trackCount} tracks
+                          {entity.trackCount}{" "}
+                          {entity.trackCount === 1 ? "track" : "tracks"}
                         </span>
                       </span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`icon-btn lib-pin${entity.pinned ? " on" : ""}`}
+                      onClick={() => setLibrary(togglePin(entity.id))}
+                      aria-label={entity.pinned ? `Unpin ${entity.name}` : `Pin ${entity.name} to top`}
+                      aria-pressed={Boolean(entity.pinned)}
+                    >
+                      <PinIcon size={14} />
                     </button>
                     <button
                       type="button"
