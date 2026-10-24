@@ -26,7 +26,14 @@ export default function PlayerBar({
       </div>
 
       <div className="playerbar-meta">
-        <span className="eyebrow">Now playing</span>
+        <div className="playerbar-topline">
+          <span className="eq" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </span>
+          <span className="eyebrow">Now playing</span>
+        </div>
         <strong>{track.title}</strong>
         <span className="playerbar-sub">{video.title}</span>
       </div>

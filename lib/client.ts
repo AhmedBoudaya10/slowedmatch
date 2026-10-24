@@ -107,6 +107,11 @@ export function watchUrl(videoId: string): string {
   return `https://www.youtube.com/watch?v=${videoId}`;
 }
 
+/** One-shot anonymous YouTube playlist (no API needed). Watch_videos caps at ~50. */
+export function playAllUrl(videoIds: string[], max = 50): string {
+  return `https://www.youtube.com/watch_videos?video_ids=${videoIds.slice(0, max).join(",")}`;
+}
+
 export function searchUrl(track: Track): string {
   const query = `${track.title} ${track.artist} slowed reverb`;
   return `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;

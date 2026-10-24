@@ -12,6 +12,7 @@ import {
   getCachedMatch,
   getCachedPlaylist,
   getRecentUrl,
+  playAllUrl,
   saveRecentUrl,
   setCachedMatch,
   setCachedPlaylist,
@@ -20,7 +21,13 @@ import {
 } from "@/lib/client";
 import TrackRow from "@/components/TrackRow";
 import PlayerBar from "@/components/PlayerBar";
-import { SearchIcon, WaveformIcon, CloseIcon } from "@/components/Icons";
+import {
+  ArrowUpIcon,
+  CloseIcon,
+  PlayIcon,
+  SearchIcon,
+  WaveformIcon,
+} from "@/components/Icons";
 
 const MAX_TRACKS = 200;
 const CONCURRENCY = 3;
@@ -60,13 +67,19 @@ export default function Home() {
   const [player, setPlayer] = useState<{ track: Track; video: VideoCandidate } | null>(null);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
+  const [toast, setToast] = useState<string | null>(null);
+  const [showTop, setShowTop] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
+  const toastTimer = useRef<number | null>(null);
 
   useEffect(() => {
     const recent = getRecentUrl();
     if (recent) setUrl(recent);
-    return () => abortRef.current?.abort();
+    return () => {
+      abortRef.current?.abort();
+      if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    };
   }, []);
 
   useEffect(() => {
@@ -74,6 +87,18 @@ export default function Home() {
     const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [running]);
+
+  useEffect(() => {
+    const onScroll = () => setShowTop(window.scrollY > 900);
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  function notify(message: string) {
+    setToast(message);
+    if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(null), 2600);
+  }
 
   const total = rows.length;
   const settled = rows.filter((r) => r.status === "done" || r.status === "error").length;
@@ -337,18 +362,20 @@ export default function Home() {
     });
   }
 
-  function exportCsv() {
+  async function exportCsv() {
     if (!playlist) return;
     download(`${slug(playlist.name)}-slowedmatch.csv`, toCsv(rows), "text/csv;charset=utf-8");
+    notify(`CSV exported · ${rows.length} tracks`);
   }
 
-  function exportJson() {
+  async function exportJson() {
     if (!playlist) return;
     download(
       `${slug(playlist.name)}-slowedmatch.json`,
       toJson(playlist, rows),
       "application/json",
     );
+    notify("JSON exported");
   }
 
   const filterCount: Record<Filter, number> = {
@@ -359,6 +386,14 @@ export default function Home() {
     none: stats.none,
     error: stats.error,
   };
+
+  const matchedIds = useMemo(
+    () =>
+      rows
+        .filter((row) => row.status === "done" && row.candidates?.[0])
+        .map((row) => row.candidates![0].videoId),
+    [rows],
+  );
 
   return (
     <>
@@ -528,10 +563,23 @@ export default function Home() {
               </div>
 
               <div className="plhead-actions">
+                {matchedIds.length > 0 && (
+                  <a
+                    className="btn btn-ghost"
+                    href={playAllUrl(matchedIds)}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    title={`Open the first ${Math.min(50, matchedIds.length)} matches as one YouTube playlist`}
+                    onClick={() => notify("Opening YouTube playlist…")}
+                  >
+                    <PlayIcon size={13} />
+                    Play all
+                  </a>
+                )}
                 <button
                   type="button"
                   className="btn btn-ghost"
-                  onClick={exportCsv}
+                  onClick={() => void exportCsv()}
                   disabled={!stats.done}
                 >
                   Export CSV
@@ -539,7 +587,7 @@ export default function Home() {
                 <button
                   type="button"
                   className="btn btn-ghost"
-                  onClick={exportJson}
+                  onClick={() => void exportJson()}
                   disabled={!stats.done}
                 >
                   JSON
@@ -580,6 +628,12 @@ export default function Home() {
               </div>
 
               <div className="toolbar">
+                <span
+                  className="toolbar-line"
+                  style={{ width: `${percent}%` }}
+                  aria-hidden="true"
+                />
+
                 <div className="chips" role="tablist" aria-label="Filter by match quality">
                   {FILTERS.map((item) => (
                     <button
@@ -639,7 +693,19 @@ export default function Home() {
               </ol>
 
               {!filteredRows.length && (
-                <p className="empty-filter">No tracks match that filter.</p>
+                <div className="empty-filter">
+                  <p>No tracks match this filter.</p>
+                  <button
+                    type="button"
+                    className="linkbtn"
+                    onClick={() => {
+                      setFilter("all");
+                      setQuery("");
+                    }}
+                  >
+                    Show all tracks
+                  </button>
+                </div>
               )}
             </>
           )}
@@ -653,6 +719,23 @@ export default function Home() {
           <span className="footer-dim">Personal use · built for slow nights</span>
         </footer>
       </div>
+
+      {rows.length > 3 && showTop && (
+        <button
+          type="button"
+          className="fab"
+          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          aria-label="Back to top"
+        >
+          <ArrowUpIcon size={18} />
+        </button>
+      )}
+
+      {toast && (
+        <div className="toast" role="status">
+          {toast}
+        </div>
+      )}
 
       {player && (
         <PlayerBar
