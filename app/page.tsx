@@ -11,13 +11,17 @@ import {
   download,
   getCachedMatch,
   getCachedPlaylist,
+  getLibrary,
   getRecentUrl,
   playAllUrl,
+  removeFromLibrary,
   saveRecentUrl,
+  saveToLibrary,
   setCachedMatch,
   setCachedPlaylist,
   toCsv,
   toJson,
+  type SavedEntity,
 } from "@/lib/client";
 import TrackRow from "@/components/TrackRow";
 import PlayerBar from "@/components/PlayerBar";
@@ -71,6 +75,7 @@ export default function Home() {
   const [toast, setToast] = useState<string | null>(null);
   const [showTop, setShowTop] = useState(false);
   const [partsOpen, setPartsOpen] = useState(false);
+  const [library, setLibrary] = useState<SavedEntity[]>([]);
 
   const abortRef = useRef<AbortController | null>(null);
   const toastTimer = useRef<number | null>(null);
@@ -78,6 +83,7 @@ export default function Home() {
   useEffect(() => {
     const recent = getRecentUrl();
     if (recent) setUrl(recent);
+    setLibrary(getLibrary());
     return () => {
       abortRef.current?.abort();
       if (toastTimer.current) window.clearTimeout(toastTimer.current);
@@ -281,6 +287,18 @@ export default function Home() {
 
       setPlaylist(result);
       saveRecentUrl(target);
+      const entity: SavedEntity = {
+        id: "",
+        url: target,
+        kind: result.kind,
+        name: result.name,
+        owner: result.owner,
+        cover: result.cover,
+        trackCount: result.tracks.length,
+        at: 0,
+      };
+      saveToLibrary(entity);
+      setLibrary(getLibrary());
 
       const capped = result.tracks.slice(0, MAX_TRACKS);
       const initial: TrackRowState[] = capped.map((track) => {
@@ -534,6 +552,60 @@ export default function Home() {
               <span className="muted">Playlist, album, artist or track · public · up to {MAX_TRACKS} tracks</span>
             </div>
           </section>
+
+          {library.length > 0 && (
+            <section className="library" aria-label="Your saved searches">
+              <div className="library-head">
+                <h2 className="library-title">Your library</h2>
+                <span className="muted">
+                  {library.length} saved {library.length === 1 ? "item" : "items"} · stored on this device
+                </span>
+              </div>
+              <div className="library-grid">
+                {library.map((entity) => (
+                  <div className="lib-card" key={entity.id}>
+                    <button
+                      type="button"
+                      className="lib-open"
+                      onClick={() => {
+                        if (resolving || running) return;
+                        setUrl(entity.url);
+                        void runPlaylist(entity.url);
+                      }}
+                      disabled={resolving || running}
+                      title={`Find matches for ${entity.name}`}
+                    >
+                      {entity.cover ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={entity.cover} alt="" loading="lazy" width={64} height={64} />
+                      ) : (
+                        <span className="lib-cover placeholder" aria-hidden="true" />
+                      )}
+                      <span className="lib-body">
+                        <span className="lib-kind">{entity.kind}</span>
+                        <span className="lib-name">{entity.name}</span>
+                        <span className="lib-sub">
+                          {entity.owner ? `${entity.owner} · ` : ""}
+                          {entity.trackCount} tracks
+                        </span>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-btn lib-remove"
+                      onClick={() => {
+                        setLibrary(removeFromLibrary(entity.id));
+                        notify(`Removed “${entity.name}”`);
+                      }}
+                      aria-label={`Remove ${entity.name} from library`}
+                    >
+                      <CloseIcon size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
 
           {error && (
             <div className="alert" role="alert">

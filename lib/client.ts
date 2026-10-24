@@ -76,6 +76,53 @@ export function getRecentUrl(): string {
 }
 
 /* ------------------------------------------------------------------ */
+/* Library — every playlist/album/artist the user has looked up        */
+/* ------------------------------------------------------------------ */
+
+export type SavedEntity = {
+  id: string;
+  url: string;
+  kind: string;
+  name: string;
+  owner?: string;
+  cover?: string;
+  trackCount: number;
+  at: number;
+};
+
+const LIBRARY_KEY = `${NS}:library`;
+const LIBRARY_MAX = 24;
+
+export function getLibrary(): SavedEntity[] {
+  const list = read<SavedEntity[]>(LIBRARY_KEY);
+  return Array.isArray(list) ? list : [];
+}
+
+function findEntityId(url: string): string {
+  const match = url.match(/spotify\.com\/(?:intl-[a-z]+\/)?(playlist|album|track|artist)\/([A-Za-z0-9]+)/i);
+  return match ? `${match[1]}:${match[2]}` : normKey(url);
+}
+
+export function saveToLibrary(
+  entity: Omit<SavedEntity, "id" | "at"> & { id?: string },
+): void {
+  const entry: SavedEntity = {
+    ...entity,
+    id: entity.id || findEntityId(entity.url),
+    at: Date.now(),
+  };
+  const list = getLibrary().filter((item) => item.id !== entry.id);
+  list.unshift(entry);
+  write(LIBRARY_KEY, list.slice(0, LIBRARY_MAX));
+}
+
+export function removeFromLibrary(id: string): SavedEntity[] {
+  const list = getLibrary().filter((item) => item.id !== id);
+  write(LIBRARY_KEY, list);
+  return list;
+}
+
+/* ------------------------------------------------------------------ */
 
 export function formatDuration(ms?: number): string {
   if (!ms || ms < 0) return "";
