@@ -10,7 +10,7 @@ export type Track = {
 
 export type PlaylistResult = {
   provider: "spotify";
-  kind: "playlist" | "album" | "track";
+  kind: "playlist" | "album" | "track" | "artist";
   id: string;
   name: string;
   owner?: string;

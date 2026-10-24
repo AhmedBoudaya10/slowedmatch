@@ -1,7 +1,7 @@
 import { HttpError, httpJson, httpText } from "./http";
 import type { PlaylistResult, Track } from "./types";
 
-const ID_RE = /(playlist|album|track)[/:]([A-Za-z0-9]{22})/i;
+const ID_RE = /(playlist|album|track|artist)[/:]([A-Za-z0-9]{22})/i;
 const BARE_ID_RE = /^[A-Za-z0-9]{22}$/;
 const MAX_TRACKS = 500;
 
@@ -16,7 +16,7 @@ export class SpotifyError extends Error {
 }
 
 export type SpotifyLink = {
-  kind: "playlist" | "album" | "track";
+  kind: "playlist" | "album" | "track" | "artist";
   id: string;
 };
 
@@ -172,6 +172,106 @@ async function playlistViaApi(id: string): Promise<PlaylistResult> {
 }
 
 /* ------------------------------------------------------------------ */
+/* API paths: album + artist                                          */
+/* ------------------------------------------------------------------ */
+
+async function albumViaApi(id: string): Promise<PlaylistResult> {
+  const token = await anonToken();
+  const headers = { authorization: `Bearer ${token}`, accept: "application/json" };
+
+  const meta = await httpJson<any>(`https://api.spotify.com/v1/albums/${id}`, {
+    headers,
+    timeoutMs: 9000,
+  });
+
+  const cover = Array.isArray(meta.images) && meta.images[0]?.url ? meta.images[0].url : undefined;
+  const total = Number(meta.tracks?.total ?? meta.tracks?.items?.length ?? 0);
+
+  const tracks: Track[] = [];
+  const seen = new Set<string>();
+
+  const push = (items: any[]) => {
+    for (const item of items) {
+      const track = mapApiTrack(item);
+      if (!track) continue;
+      track.cover = cover;
+      const key = track.id || `${track.title}|${track.artist}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      tracks.push(track);
+    }
+  };
+
+  push(meta.tracks?.items ?? []);
+
+  let offset = tracks.length;
+  while (offset < Math.min(total, MAX_TRACKS)) {
+    const page = await httpJson<any>(
+      `https://api.spotify.com/v1/albums/${id}/tracks?limit=50&offset=${offset}`,
+      { headers, timeoutMs: 9000 },
+    );
+    const items: any[] = page?.items ?? [];
+    if (!items.length) break;
+    push(items);
+    offset += items.length;
+  }
+
+  return {
+    provider: "spotify",
+    kind: "album",
+    id,
+    name: typeof meta.name === "string" ? meta.name : "Spotify album",
+    owner: Array.isArray(meta.artists)
+      ? meta.artists.map((a: any) => (typeof a?.name === "string" ? a.name : "")).filter(Boolean).join(", ")
+      : undefined,
+    cover,
+    tracks,
+    total,
+    truncated: tracks.length < total,
+    source: "api",
+  };
+}
+
+async function artistViaApi(id: string): Promise<PlaylistResult> {
+  const token = await anonToken();
+  const headers = { authorization: `Bearer ${token}`, accept: "application/json" };
+
+  const [meta, top] = await Promise.all([
+    httpJson<any>(`https://api.spotify.com/v1/artists/${id}`, { headers, timeoutMs: 9000 }),
+    httpJson<any>(`https://api.spotify.com/v1/artists/${id}/top-tracks?market=from_token`, {
+      headers,
+      timeoutMs: 9000,
+    }),
+  ]);
+
+  const tracks: Track[] = [];
+  const seen = new Set<string>();
+  for (const item of top.tracks ?? []) {
+    const track = mapApiTrack(item);
+    if (!track) continue;
+    const key = track.id || `${track.title}|${track.artist}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    tracks.push(track);
+  }
+
+  return {
+    provider: "spotify",
+    kind: "artist",
+    id,
+    name: typeof meta.name === "string" ? meta.name : "Spotify artist",
+    owner: meta.followers?.total
+      ? `${new Intl.NumberFormat("en", { notation: "compact" }).format(meta.followers.total)} followers`
+      : undefined,
+    cover: Array.isArray(meta.images) && meta.images[0]?.url ? meta.images[0].url : undefined,
+    tracks,
+    total: tracks.length,
+    truncated: false,
+    source: "api",
+  };
+}
+
+/* ------------------------------------------------------------------ */
 /* Embed fallback (public page, no auth, 100 track ceiling)           */
 /* ------------------------------------------------------------------ */
 
@@ -209,7 +309,9 @@ async function viaEmbed(kind: SpotifyLink["kind"], id: string): Promise<Playlist
   );
   if (!match) {
     throw new SpotifyError(
-      "Couldn't read that Spotify page. Make sure the link is public and points at a playlist.",
+      kind === "artist"
+        ? "Artist pages aren't publicly readable by Spotify's embed player."
+        : "Couldn't read that Spotify page. Make sure the link is public.",
       404,
     );
   }
@@ -310,8 +412,30 @@ export async function resolvePlaylist(input: string): Promise<PlaylistResult> {
   const parsed = parseSpotifyLink(input);
   if (!parsed) {
     throw new SpotifyError(
-      "That doesn't look like a Spotify link. In Spotify use Share → Copy link to playlist.",
+      "That doesn't look like a Spotify link. In Spotify use Share → Copy link (playlist, album, artist or track).",
       400,
+    );
+  }
+
+  if (parsed.kind === "album") {
+    try {
+      const viaApi = await albumViaApi(parsed.id);
+      if (viaApi.tracks.length > 0) return viaApi;
+    } catch {
+      // Token endpoint often blocked from datacenter IPs — fall through to embed.
+    }
+  }
+
+  if (parsed.kind === "artist") {
+    try {
+      const viaApi = await artistViaApi(parsed.id);
+      if (viaApi.tracks.length > 0) return viaApi;
+    } catch {
+      // Artists have no public embed — surface a clear message instead.
+    }
+    throw new SpotifyError(
+      "Artist lookup needs Spotify's web-player token right now, and it's temporarily blocking this server. Try again in a bit, or paste a playlist/album/track link meanwhile.",
+      503,
     );
   }
 

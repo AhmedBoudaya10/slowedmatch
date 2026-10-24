@@ -24,7 +24,7 @@ export async function GET(request: Request) {
 
     if (!playlist.tracks.length) {
       return NextResponse.json(
-        { error: "That playlist is empty, or Spotify didn't share its tracks." },
+        { error: "Nothing playable was found, or Spotify didn't share its tracks." },
         { status: 404 },
       );
     }

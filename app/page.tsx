@@ -515,7 +515,7 @@ export default function Home() {
               <span className="dot-sep" aria-hidden="true">
                 ·
               </span>
-              <span className="muted">Public playlists · up to {MAX_TRACKS} tracks</span>
+              <span className="muted">Playlist, album, artist or track · public · up to {MAX_TRACKS} tracks</span>
             </div>
           </section>
 
