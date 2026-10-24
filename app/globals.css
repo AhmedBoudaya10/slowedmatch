@@ -554,6 +554,71 @@ input {
   justify-content: flex-end;
 }
 
+/* Play all split button + parts menu */
+.split {
+  position: relative;
+  display: inline-flex;
+}
+
+.split .btn:first-child {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  flex: 1;
+}
+
+.split .split-caret {
+  min-height: 46px;
+  padding: 0 12px;
+  margin-left: -1px;
+  border-left: 1px solid var(--line);
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.parts-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 200px;
+  max-height: 40vh;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: rgba(11, 13, 17, 0.96);
+  backdrop-filter: blur(18px);
+  box-shadow: var(--shadow-lg);
+  animation: player-in 0.18s ease both;
+}
+
+.parts-menu a {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.parts-menu a:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.parts-menu a span {
+  color: var(--muted-2);
+  font-size: 0.73rem;
+  font-weight: 400;
+}
+
 /* ------------------------------------------------------------------ */
 /* Progress                                                           */
 /* ------------------------------------------------------------------ */
@@ -1477,6 +1542,16 @@ body:has(.playerbar) .footer {
 
   .plhead-actions .btn {
     flex: 1;
+  }
+
+  .plhead-actions .split {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .parts-menu {
+    right: auto;
+    left: 0;
   }
 }
 

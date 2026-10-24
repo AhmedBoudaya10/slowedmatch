@@ -23,6 +23,7 @@ import TrackRow from "@/components/TrackRow";
 import PlayerBar from "@/components/PlayerBar";
 import {
   ArrowUpIcon,
+  ChevronDownIcon,
   CloseIcon,
   PlayIcon,
   SearchIcon,
@@ -69,6 +70,7 @@ export default function Home() {
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [toast, setToast] = useState<string | null>(null);
   const [showTop, setShowTop] = useState(false);
+  const [partsOpen, setPartsOpen] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const toastTimer = useRef<number | null>(null);
@@ -93,6 +95,16 @@ export default function Home() {
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
+
+  useEffect(() => {
+    if (!partsOpen) return;
+    const close = (event: MouseEvent) => {
+      const target = event.target as Element | null;
+      if (!target?.closest(".split")) setPartsOpen(false);
+    };
+    document.addEventListener("click", close);
+    return () => document.removeEventListener("click", close);
+  }, [partsOpen]);
 
   function notify(message: string) {
     setToast(message);
@@ -387,13 +399,35 @@ export default function Home() {
     error: stats.error,
   };
 
-  const matchedIds = useMemo(
-    () =>
-      rows
-        .filter((row) => row.status === "done" && row.candidates?.[0])
-        .map((row) => row.candidates![0].videoId),
-    [rows],
-  );
+  const matchedIds = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const row of rows) {
+      const id = row.status === "done" ? row.candidates?.[0]?.videoId : undefined;
+      if (id && !seen.has(id)) {
+        seen.add(id);
+        out.push(id);
+      }
+    }
+    return out;
+  }, [rows]);
+
+  // YouTube's anonymous watch_videos queue caps at 50 videos, so long playlists
+  // are offered in sequential parts. The button opens part 1; the caret menu
+  // lists every part so the full playlist is still reachable in one place.
+  const PLAY_QUEUE_SIZE = 50;
+  const queueParts = useMemo(() => {
+    const parts: { from: number; to: number; url: string }[] = [];
+    for (let i = 0; i < matchedIds.length; i += PLAY_QUEUE_SIZE) {
+      const slice = matchedIds.slice(i, i + PLAY_QUEUE_SIZE);
+      parts.push({
+        from: i + 1,
+        to: i + slice.length,
+        url: playAllUrl(slice, PLAY_QUEUE_SIZE),
+      });
+    }
+    return parts;
+  }, [matchedIds]);
 
   return (
     <>
@@ -563,18 +597,61 @@ export default function Home() {
               </div>
 
               <div className="plhead-actions">
-                {matchedIds.length > 0 && (
-                  <a
-                    className="btn btn-ghost"
-                    href={playAllUrl(matchedIds)}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    title={`Open the first ${Math.min(50, matchedIds.length)} matches as one YouTube playlist`}
-                    onClick={() => notify("Opening YouTube playlist…")}
-                  >
-                    <PlayIcon size={13} />
-                    Play all
-                  </a>
+                {queueParts.length > 0 && (
+                  <div className="split">
+                    <a
+                      className="btn btn-ghost"
+                      href={queueParts[0].url}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      title={
+                        queueParts.length > 1
+                          ? `All ${matchedIds.length} matches · YouTube queues max 50 videos, so this opens part 1 of ${queueParts.length}`
+                          : "Open all matches as one YouTube playlist"
+                      }
+                      onClick={() =>
+                        notify(
+                          queueParts.length > 1
+                            ? `Opening part 1/${queueParts.length} · play from the menu for the rest`
+                            : "Opening YouTube playlist…",
+                        )
+                      }
+                    >
+                      <PlayIcon size={13} />
+                      Play all
+                    </a>
+                    {queueParts.length > 1 && (
+                      <>
+                        <button
+                          type="button"
+                          className="btn btn-ghost split-caret"
+                          aria-expanded={partsOpen}
+                          aria-haspopup="menu"
+                          aria-label={`Playlist parts (${queueParts.length})`}
+                          onClick={() => setPartsOpen((open) => !open)}
+                        >
+                          <ChevronDownIcon size={13} />
+                        </button>
+                        {partsOpen && (
+                          <div className="parts-menu" role="menu" aria-label="Queue parts">
+                            {queueParts.map((part, index) => (
+                              <a
+                                key={part.url}
+                                role="menuitem"
+                                href={part.url}
+                                target="_blank"
+                                rel="noreferrer noopener"
+                                onClick={() => setPartsOpen(false)}
+                              >
+                                Part {index + 1}
+                                <span>matches {part.from}–{part.to}</span>
+                              </a>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
                 )}
                 <button
                   type="button"
@@ -653,12 +730,12 @@ export default function Home() {
 
                 <div className="toolbar-right">
                   <label className="mini-search">
-                    <span className="sr-only">Filter tracks</span>
+                    <span className="sr-only">Search tracks or artists</span>
                     <SearchIcon size={14} />
                     <input
                       value={query}
                       onChange={(event) => setQuery(event.target.value)}
-                      placeholder="Filter tracks"
+                      placeholder="Search tracks or artists"
                       type="search"
                     />
                   </label>
