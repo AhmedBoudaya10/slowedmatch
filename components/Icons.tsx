@@ -49,6 +49,15 @@ export function ChevronDownIcon({ size = 14 }: { size?: number }) {
   );
 }
 
+export function SkipIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M6 5.5v13l9-6.5-9-6.5Z" />
+      <path d="M18 5.5v13" fill="none" strokeWidth="2" />
+    </svg>
+  );
+}
+
 export function SearchIcon({ size = 16 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">

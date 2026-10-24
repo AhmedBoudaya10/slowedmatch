@@ -429,6 +429,22 @@ export default function Home() {
     return parts;
   }, [matchedIds]);
 
+  const playNext = () => {
+    if (!player) return;
+    const currentIndex = rows.findIndex((row) => row.track.id === player.track.id);
+    for (let i = currentIndex + 1; i < rows.length; i++) {
+      const row = rows[i];
+      const video = row.status === "done" ? row.candidates?.[0] : undefined;
+      if (video) {
+        setPlayer({ track: row.track, video });
+        notify(`Next: ${row.track.title}`);
+        return;
+      }
+    }
+    notify("End of playlist");
+    setPlayer(null);
+  };
+
   return (
     <>
       <a className="skip-link" href="#tracks">
@@ -819,6 +835,7 @@ export default function Home() {
           track={player.track}
           video={player.video}
           onClose={() => setPlayer(null)}
+          onNext={playNext}
         />
       )}
     </>
