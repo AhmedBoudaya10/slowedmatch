@@ -38,6 +38,14 @@ export type VideoCandidate = RawVideo & {
   score: number;
   confidence: Confidence;
   reasons: string[];
+  /** Points contributed by each weighted signal (sums to ~score). */
+  breakdown?: {
+    title: number;
+    artist: number;
+    duration: number;
+    evidence: number;
+    quality: number;
+  };
 };
 
 export type SearchResponse = {

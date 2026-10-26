@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { Track, VideoCandidate } from "@/lib/types";
-import { CloseIcon, SkipIcon } from "./Icons";
+import { CloseIcon, HeartIcon, SkipIcon } from "./Icons";
 
 /* ------------------------------------------------------------------ */
 /* YouTube IFrame API (needed to auto-play the next video in-session)  */
@@ -46,16 +46,22 @@ function youTubeApi(): Promise<any> {
 
 /* ------------------------------------------------------------------ */
 
-export default function PlayerBar({
+export default function MiniPlayer({
   track,
   video,
+  saved,
   onClose,
   onNext,
+  onFavorite,
+  onExpand,
 }: {
   track: Track;
   video: VideoCandidate;
+  saved: boolean;
   onClose: () => void;
   onNext: () => void;
+  onFavorite: () => void;
+  onExpand: () => void;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const playerRef = useRef<any>(null);
@@ -63,7 +69,6 @@ export default function PlayerBar({
   const nextRef = useRef(onNext);
   const [fallback, setFallback] = useState(false);
 
-  // Keep the latest "play next" handler without re-creating the player.
   nextRef.current = onNext;
 
   useEffect(() => {
@@ -111,9 +116,7 @@ export default function PlayerBar({
   useEffect(() => {
     if (video.videoId === currentIdRef.current) return;
     currentIdRef.current = video.videoId;
-    if (playerRef.current?.loadVideoById) {
-      playerRef.current.loadVideoById(video.videoId);
-    }
+    playerRef.current?.loadVideoById?.(video.videoId);
   }, [video.videoId]);
 
   return (
@@ -144,12 +147,29 @@ export default function PlayerBar({
         <span className="playerbar-sub">{video.title}</span>
       </div>
 
-      <button type="button" className="icon-btn" onClick={onNext} aria-label="Play next track">
-        <SkipIcon />
-      </button>
-      <button type="button" className="icon-btn" onClick={onClose} aria-label="Close player">
-        <CloseIcon />
-      </button>
+      <div className="playerbar-actions">
+        <button
+          type="button"
+          className={`icon-btn heart${saved ? " on" : ""}`}
+          onClick={onFavorite}
+          aria-pressed={saved}
+          aria-label={saved ? "Remove from favorites" : "Save to favorites"}
+        >
+          <HeartIcon size={15} filled={saved} />
+        </button>
+        <button type="button" className="icon-btn" onClick={onExpand} aria-label="Open on YouTube">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M14 4h6v6M20 4l-8.5 8.5" />
+            <path d="M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4" />
+          </svg>
+        </button>
+        <button type="button" className="icon-btn" onClick={onNext} aria-label="Play next track">
+          <SkipIcon size={15} />
+        </button>
+        <button type="button" className="icon-btn" onClick={onClose} aria-label="Close player">
+          <CloseIcon size={16} />
+        </button>
+      </div>
     </div>
   );
 }

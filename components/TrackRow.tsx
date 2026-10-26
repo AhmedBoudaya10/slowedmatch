@@ -4,12 +4,12 @@
 
 import type { TrackRowState, VideoCandidate } from "@/lib/types";
 import { formatClock, formatDuration, formatViews, searchUrl, watchUrl } from "@/lib/client";
-import { ExternalIcon, PauseIcon, PlayIcon } from "./Icons";
+import { ExternalIcon, HeartIcon, PauseIcon, PlayIcon } from "./Icons";
 
 const CONF_LABEL = {
-  high: "Good match",
+  high: "Match",
   medium: "Likely",
-  low: "Weak",
+  low: "Review",
 } as const;
 
 function coverTone(title: string): number {
@@ -20,17 +20,49 @@ function coverTone(title: string): number {
   return Math.abs(hash) % 360;
 }
 
+function breakdownText(video: VideoCandidate): string {
+  const b = video.breakdown;
+  if (!b) return video.reasons.join(" · ");
+  return [
+    `Title ${b.title}/30`,
+    `Artist ${b.artist}/25`,
+    `Length ${b.duration}/15`,
+    `Treatment ${b.evidence}/20`,
+    `Quality ${b.quality}/10`,
+  ].join(" · ");
+}
+
 function MatchCard({
   video,
   playing,
   compact,
+  saved,
+  deltaSec,
   onPlay,
+  onFavorite,
 }: {
   video: VideoCandidate;
   playing: boolean;
   compact?: boolean;
+  saved: boolean;
+  /** Difference between the video and the Spotify track, in seconds. */
+  deltaSec?: number | null;
   onPlay: () => void;
+  onFavorite: () => void;
 }) {
+  const delta =
+    typeof deltaSec === "number" && Math.abs(deltaSec) >= 5 ? deltaSec : null;
+  const compare =
+    delta === null
+      ? null
+      : `${delta > 0 ? "+" : "−"}${formatClock(Math.abs(delta))}`;
+  const compareTitle =
+    delta === null
+      ? undefined
+      : `Runs ${formatClock(Math.abs(delta))} ${
+          delta > 0 ? "longer" : "shorter"
+        } than the original`;
+
   return (
     <div className={`matchcard${compact ? " compact" : ""}`}>
       <button
@@ -48,9 +80,17 @@ function MatchCard({
       <div className="mc-body">
         <div className="mc-row">
           <span className={`pill ${video.confidence}`}>{CONF_LABEL[video.confidence]}</span>
-          <span className="mc-stat">
+          <span className="mc-stat" title={compareTitle}>
             {formatClock(video.durationSec)}
+            {compare ? ` (${compare})` : ""}
             {video.views ? ` · ${formatViews(video.views)}` : ""}
+          </span>
+          <span
+            className="mc-score"
+            title={breakdownText(video)}
+            aria-label={`Confidence ${Math.round(video.score)} of 100`}
+          >
+            {Math.round(video.score)}
           </span>
         </div>
 
@@ -65,18 +105,30 @@ function MatchCard({
         </a>
 
         <div className="mc-foot">
-          <span className="mc-chan" title={video.reasons.join(" · ")}>
+          <span className="mc-chan" title={breakdownText(video)}>
             {video.channel || "YouTube"}
           </span>
-          <a
-            className="mc-open"
-            href={watchUrl(video.videoId)}
-            target="_blank"
-            rel="noreferrer noopener"
-            aria-label="Open on YouTube"
-          >
-            <ExternalIcon />
-          </a>
+          <div className="mc-actions">
+            <button
+              type="button"
+              className={`icon-btn heart${saved ? " on" : ""}`}
+              onClick={onFavorite}
+              aria-pressed={saved}
+              aria-label={saved ? "Remove from favorites" : "Save to favorites"}
+              title={saved ? "Remove from favorites" : "Save to favorites"}
+            >
+              <HeartIcon size={15} filled={saved} />
+            </button>
+            <a
+              className="icon-btn"
+              href={watchUrl(video.videoId)}
+              target="_blank"
+              rel="noreferrer noopener"
+              aria-label="Open on YouTube"
+            >
+              <ExternalIcon size={13} />
+            </a>
+          </div>
         </div>
       </div>
     </div>
@@ -88,23 +140,30 @@ export default function TrackRow({
   index,
   expanded,
   playingId,
+  favorites,
   onToggle,
   onPlay,
   onRetry,
+  onFavorite,
 }: {
   row: TrackRowState;
   index: number;
   expanded: boolean;
   playingId?: string;
+  favorites: Set<string>;
   onToggle: () => void;
   onPlay: (video: VideoCandidate) => void;
   onRetry: () => void;
+  onFavorite: (video: VideoCandidate) => void;
 }) {
   const { track } = row;
   const best = row.candidates?.[0];
+  const trackSec = track.durationMs ? Math.round(track.durationMs / 1000) : 0;
+  const deltaSec =
+    best?.durationSec && trackSec ? best.durationSec - trackSec : null;
 
   return (
-    <li className={`track ${row.status}`}>
+    <li className={`track ${row.status}`} id={`track-${index}`} data-index={index} tabIndex={-1}>
       <div className="track-main">
         <span className="track-index" aria-hidden="true">
           {String(index + 1).padStart(2, "0")}
@@ -186,7 +245,10 @@ export default function TrackRow({
             <MatchCard
               video={best}
               playing={playingId === best.videoId}
+              saved={favorites.has(best.videoId)}
+              deltaSec={deltaSec}
               onPlay={() => onPlay(best)}
+              onFavorite={() => onFavorite(best)}
             />
 
             {row.candidates && row.candidates.length > 1 && (
@@ -196,7 +258,7 @@ export default function TrackRow({
                 onClick={onToggle}
                 aria-expanded={expanded}
               >
-                {expanded ? "Hide" : `Show ${row.candidates.length - 1} more`}
+                {expanded ? "Hide versions" : `Show ${row.candidates.length - 1} more`}
                 <span aria-hidden="true">{expanded ? "−" : "+"}</span>
               </button>
             )}
@@ -209,7 +271,14 @@ export default function TrackRow({
                     video={video}
                     compact
                     playing={playingId === video.videoId}
+                    saved={favorites.has(video.videoId)}
+                    deltaSec={
+                      video.durationSec && trackSec
+                        ? video.durationSec - trackSec
+                        : null
+                    }
                     onPlay={() => onPlay(video)}
+                    onFavorite={() => onFavorite(video)}
                   />
                 ))}
               </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type {
   PlaylistResult,
   Track,
@@ -8,9 +8,11 @@ import type {
   VideoCandidate,
 } from "@/lib/types";
 import {
+  copyText,
   download,
   getCachedMatch,
   getCachedPlaylist,
+  getFavorites,
   getLibrary,
   getRecentUrl,
   playAllUrl,
@@ -21,35 +23,33 @@ import {
   setCachedPlaylist,
   toCsv,
   toJson,
+  toM3u,
+  toggleFavorite,
   togglePin,
+  watchUrl,
   type SavedEntity,
 } from "@/lib/client";
 import TrackRow from "@/components/TrackRow";
-import PlayerBar from "@/components/PlayerBar";
+import MiniPlayer from "@/components/MiniPlayer";
+import Hero from "@/components/Hero";
+import LibraryShelf from "@/components/LibraryShelf";
+import ProgressPanel from "@/components/ProgressPanel";
+import PlaylistHeader from "@/components/PlaylistHeader";
+import Toolbar, { type Filter } from "@/components/Toolbar";
+import EmptyState from "@/components/EmptyState";
+import Toast from "@/components/Toast";
 import {
+  AlertIcon,
   ArrowUpIcon,
-  ChevronDownIcon,
   CloseIcon,
-  PinIcon,
-  PlayIcon,
-  SearchIcon,
   WaveformIcon,
 } from "@/components/Icons";
 
 const MAX_TRACKS = 200;
-const CONCURRENCY = 3;
+const DEFAULT_CONCURRENCY = 3;
+const CONCURRENCY_KEY = "slowedmatch:v1:concurrency";
 const DEMO_URL = "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M";
-
-type Filter = "all" | "high" | "medium" | "low" | "none" | "error";
-
-const FILTERS: { id: Filter; label: string }[] = [
-  { id: "all", label: "All" },
-  { id: "high", label: "Good" },
-  { id: "medium", label: "Likely" },
-  { id: "low", label: "Weak" },
-  { id: "none", label: "None" },
-  { id: "error", label: "Failed" },
-];
+const PLAY_QUEUE_SIZE = 50;
 
 function slug(name: string): string {
   return (
@@ -57,7 +57,7 @@ function slug(name: string): string {
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "")
-      .slice(0, 60) || "playlist"
+      .slice(0, 60) || "slowedmatch"
   );
 }
 
@@ -70,22 +70,35 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
+  const deferredQuery = useDeferredValue(query);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [player, setPlayer] = useState<{ track: Track; video: VideoCandidate } | null>(null);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [toast, setToast] = useState<string | null>(null);
   const [showTop, setShowTop] = useState(false);
-  const [partsOpen, setPartsOpen] = useState(false);
   const [library, setLibrary] = useState<SavedEntity[]>([]);
+  const [favorites, setFavorites] = useState<string[]>([]);
+  const [concurrency, setConcurrency] = useState(DEFAULT_CONCURRENCY);
 
   const abortRef = useRef<AbortController | null>(null);
   const toastTimer = useRef<number | null>(null);
+  const searchRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const recent = getRecentUrl();
     if (recent) setUrl(recent);
     setLibrary(getLibrary());
+    setFavorites(getFavorites());
+
+    const savedConcurrency = Number(window.localStorage.getItem(CONCURRENCY_KEY));
+    if (
+      Number.isFinite(savedConcurrency) &&
+      savedConcurrency >= 2 &&
+      savedConcurrency <= 6
+    ) {
+      setConcurrency(savedConcurrency);
+    }
     return () => {
       abortRef.current?.abort();
       if (toastTimer.current) window.clearTimeout(toastTimer.current);
@@ -104,21 +117,13 @@ export default function Home() {
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
-  useEffect(() => {
-    if (!partsOpen) return;
-    const close = (event: MouseEvent) => {
-      const target = event.target as Element | null;
-      if (!target?.closest(".split")) setPartsOpen(false);
-    };
-    document.addEventListener("click", close);
-    return () => document.removeEventListener("click", close);
-  }, [partsOpen]);
-
-  function notify(message: string) {
+  const notify = useCallback((message: string) => {
     setToast(message);
     if (toastTimer.current) window.clearTimeout(toastTimer.current);
-    toastTimer.current = window.setTimeout(() => setToast(null), 2600);
-  }
+    toastTimer.current = window.setTimeout(() => setToast(null), 2800);
+  }, []);
+
+  const favoriteSet = useMemo(() => new Set(favorites), [favorites]);
 
   const total = rows.length;
   const settled = rows.filter((r) => r.status === "done" || r.status === "error").length;
@@ -129,7 +134,7 @@ export default function Home() {
 
   const eta = useMemo(() => {
     if (!running || !startedAt || settled === 0 || settled >= total) return 0;
-    const elapsed = Math.max(1, ((nowTick || Date.now()) - startedAt) / 1000);
+    const elapsed = Math.max(1, (nowTick || Date.now()) - startedAt) / 1000;
     return Math.max(1, Math.round((elapsed / settled) * (total - settled)));
   }, [running, startedAt, settled, total, nowTick]);
 
@@ -152,7 +157,7 @@ export default function Home() {
   }, [rows]);
 
   const filteredRows = useMemo(() => {
-    const term = query.trim().toLowerCase();
+    const term = deferredQuery.trim().toLowerCase();
     return rows.filter((row) => {
       if (
         term &&
@@ -162,6 +167,8 @@ export default function Home() {
       }
       const confidence = row.candidates?.[0]?.confidence;
       switch (filter) {
+        case "saved":
+          return Boolean(row.candidates?.some((video) => favoriteSet.has(video.videoId)));
         case "high":
           return confidence === "high";
         case "medium":
@@ -176,12 +183,70 @@ export default function Home() {
           return true;
       }
     });
-  }, [rows, filter, query]);
+  }, [rows, filter, deferredQuery, favoriteSet]);
 
-  const indexById = useMemo(
-    () => new Map(rows.map((row, index) => [row.track.id, index])),
-    [rows],
+  const filterCounts: Record<Filter, number> = useMemo(
+    () => ({
+      all: rows.length,
+      saved: rows.filter((row) =>
+        row.candidates?.some((video) => favoriteSet.has(video.videoId)),
+      ).length,
+      high: stats.high,
+      medium: stats.medium,
+      low: stats.low,
+      none: stats.none,
+      error: stats.error,
+    }),
+    [rows, stats, favoriteSet],
   );
+
+  const matchedIds = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const row of rows) {
+      const id = row.status === "done" ? row.candidates?.[0]?.videoId : undefined;
+      if (id && !seen.has(id)) {
+        seen.add(id);
+        out.push(id);
+      }
+    }
+    return out;
+  }, [rows]);
+
+  // YouTube's anonymous queue caps at 50 videos — expose the rest as parts.
+  const queueParts = useMemo(() => {
+    const parts: { from: number; to: number; url: string }[] = [];
+    for (let i = 0; i < matchedIds.length; i += PLAY_QUEUE_SIZE) {
+      const slice = matchedIds.slice(i, i + PLAY_QUEUE_SIZE);
+      parts.push({
+        from: i + 1,
+        to: i + slice.length,
+        url: playAllUrl(slice, PLAY_QUEUE_SIZE),
+      });
+    }
+    return parts;
+  }, [matchedIds]);
+
+  const recentItems = useMemo(() => library.slice(0, 5), [library]);
+
+  function resetResults() {
+    abortRef.current?.abort();
+    setPlaylist(null);
+    setRows([]);
+    setPlayer(null);
+    setFilter("all");
+    setQuery("");
+    setExpanded(new Set());
+    setError(null);
+    setResolving(false);
+    setRunning(false);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function newSearch() {
+    resetResults();
+    window.setTimeout(() => searchRef.current?.focus(), 350);
+  }
 
   function patchById(id: string, patch: Partial<TrackRowState>) {
     setRows((prev) =>
@@ -242,14 +307,16 @@ export default function Home() {
     };
 
     await Promise.all(
-      Array.from({ length: Math.min(CONCURRENCY, tracks.length) }, worker),
+      Array.from({ length: Math.min(concurrency, tracks.length) }, worker),
     );
+
+    if (!signal.aborted) setRunning(false);
   }
 
   async function runPlaylist(input: string) {
     const target = input.trim();
     if (!target) {
-      setError("Paste a Spotify playlist link first.");
+      setError("Paste a Spotify link first.");
       return;
     }
 
@@ -268,15 +335,15 @@ export default function Home() {
     setRunning(true);
     setStartedAt(Date.now());
     setNowTick(Date.now());
+    setUrl(target);
 
     try {
       let result = getCachedPlaylist(target);
 
       if (!result) {
-        const res = await fetch(
-          `/api/playlist?url=${encodeURIComponent(target)}`,
-          { signal: controller.signal },
-        );
+        const res = await fetch(`/api/playlist?url=${encodeURIComponent(target)}`, {
+          signal: controller.signal,
+        });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data?.error || "Couldn't load that playlist.");
         result = data as PlaylistResult;
@@ -284,12 +351,13 @@ export default function Home() {
       }
 
       if (!result?.tracks?.length) {
-        throw new Error("That playlist has no tracks I can read.");
+        throw new Error("That link has no tracks I can read.");
       }
 
       setPlaylist(result);
       saveRecentUrl(target);
-      const entity: SavedEntity = {
+
+      saveToLibrary({
         id: "",
         url: target,
         kind: result.kind,
@@ -297,9 +365,7 @@ export default function Home() {
         owner: result.owner,
         cover: result.cover,
         trackCount: result.tracks.length,
-        at: 0,
-      };
-      saveToLibrary(entity);
+      });
       setLibrary(getLibrary());
 
       const capped = result.tracks.slice(0, MAX_TRACKS);
@@ -323,133 +389,64 @@ export default function Home() {
         .filter((row) => row.status === "pending")
         .map((row) => row.track);
 
-      if (pending.length) await runQueue(pending, controller.signal);
-    } catch (err) {
-      if ((err as Error).name === "AbortError") return;
-      setError((err as Error).message || "Something went wrong.");
-    } finally {
-      if (abortRef.current === controller) {
+      if (!pending.length) {
         setRunning(false);
-        setResolving(false);
-        setStartedAt(null);
+        notify("Loaded from cache");
+        return;
       }
+
+      await runQueue(pending, controller.signal);
+    } catch (err) {
+      if (controller.signal.aborted) return;
+      setError((err as Error).message || "Something went wrong.");
+      setResolving(false);
+      setRunning(false);
     }
   }
 
-  function stop() {
+  function changeConcurrency(value: number) {
+    setConcurrency(value);
+    try {
+      window.localStorage.setItem(CONCURRENCY_KEY, String(value));
+    } catch {
+      /* storage may be unavailable in private mode */
+    }
+  }
+
+  function stopSearch() {
     abortRef.current?.abort();
-    abortRef.current = null;
-    setRunning(false);
-    setResolving(false);
-    setStartedAt(null);
+    // Aborted requests never resolve — put them back in the queue so Resume retries them.
     setRows((prev) =>
       prev.map((row) =>
         row.status === "loading" ? { ...row, status: "pending" } : row,
       ),
     );
+    setRunning(false);
+    notify("Search stopped — resume any time");
   }
 
-  async function resume() {
-    const pending = rows.filter(
-      (row) => row.status === "pending" || row.status === "error",
-    );
-    if (!pending.length) return;
-
+  function resumeSearch() {
     const controller = new AbortController();
     abortRef.current = controller;
     setRunning(true);
     setStartedAt(Date.now());
     setNowTick(Date.now());
-    setRows((prev) =>
-      prev.map((row) =>
-        row.status === "error"
-          ? { ...row, status: "pending", error: undefined }
-          : row,
-      ),
-    );
 
-    await runQueue(
-      pending.map((row) => row.track),
-      controller.signal,
-    );
+    const pending = rows
+      .filter((row) => row.status === "pending" || row.status === "error")
+      .map((row) => row.track);
 
-    if (abortRef.current === controller) {
-      setRunning(false);
-      setStartedAt(null);
-    }
+    void runQueue(pending, controller.signal);
   }
 
-  async function retryOne(track: Track) {
-    const controller = abortRef.current ?? new AbortController();
+  function retryTrack(track: Track) {
+    const controller = new AbortController();
     abortRef.current = controller;
-    await processTrack(track, controller.signal);
+    setRunning(true);
+    void runQueue([track], controller.signal);
   }
 
-  function toggleExpanded(id: string) {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  async function exportCsv() {
-    if (!playlist) return;
-    download(`${slug(playlist.name)}-slowedmatch.csv`, toCsv(rows), "text/csv;charset=utf-8");
-    notify(`CSV exported · ${rows.length} tracks`);
-  }
-
-  async function exportJson() {
-    if (!playlist) return;
-    download(
-      `${slug(playlist.name)}-slowedmatch.json`,
-      toJson(playlist, rows),
-      "application/json",
-    );
-    notify("JSON exported");
-  }
-
-  const filterCount: Record<Filter, number> = {
-    all: rows.length,
-    high: stats.high,
-    medium: stats.medium,
-    low: stats.low,
-    none: stats.none,
-    error: stats.error,
-  };
-
-  const matchedIds = useMemo(() => {
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const row of rows) {
-      const id = row.status === "done" ? row.candidates?.[0]?.videoId : undefined;
-      if (id && !seen.has(id)) {
-        seen.add(id);
-        out.push(id);
-      }
-    }
-    return out;
-  }, [rows]);
-
-  // YouTube's anonymous watch_videos queue caps at 50 videos, so long playlists
-  // are offered in sequential parts. The button opens part 1; the caret menu
-  // lists every part so the full playlist is still reachable in one place.
-  const PLAY_QUEUE_SIZE = 50;
-  const queueParts = useMemo(() => {
-    const parts: { from: number; to: number; url: string }[] = [];
-    for (let i = 0; i < matchedIds.length; i += PLAY_QUEUE_SIZE) {
-      const slice = matchedIds.slice(i, i + PLAY_QUEUE_SIZE);
-      parts.push({
-        from: i + 1,
-        to: i + slice.length,
-        url: playAllUrl(slice, PLAY_QUEUE_SIZE),
-      });
-    }
-    return parts;
-  }, [matchedIds]);
-
-  const playNext = () => {
+  const playNext = useCallback(() => {
     if (!player) return;
     const currentIndex = rows.findIndex((row) => row.track.id === player.track.id);
     for (let i = currentIndex + 1; i < rows.length; i++) {
@@ -463,23 +460,139 @@ export default function Home() {
     }
     notify("End of playlist");
     setPlayer(null);
-  };
+  }, [player, rows, notify]);
 
-  const sortedLibrary = useMemo(
-    () =>
-      [...library].sort(
-        (a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)),
-      ),
-    [library],
+  const playRow = useCallback(
+    (track: Track, video: VideoCandidate) => setPlayer({ track, video }),
+    [],
   );
+
+  const retryRow = useCallback(
+    (track: Track) => retryTrack(track),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  const toggleRow = useCallback((trackId: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(trackId)) next.delete(trackId);
+      else next.add(trackId);
+      return next;
+    });
+  }, []);
+
+  const favoriteVideo = useCallback(
+    (video: VideoCandidate) => {
+      const next = toggleFavorite(video.videoId);
+      setFavorites(next);
+      notify(next.includes(video.videoId) ? "Saved to favorites" : "Removed from favorites");
+    },
+    [notify],
+  );
+
+  function exportCsv() {
+    if (!playlist) return;
+    download(`${slug(playlist.name)}-slowedmatch.csv`, toCsv(rows), "text/csv;charset=utf-8");
+    notify(`CSV exported · ${rows.length} tracks`);
+  }
+
+  function exportJson() {
+    if (!playlist) return;
+    download(
+      `${slug(playlist.name)}-slowedmatch.json`,
+      toJson(playlist, rows),
+      "application/json",
+    );
+    notify("JSON exported");
+  }
+
+  function exportM3u() {
+    if (!playlist) return;
+    download(`${slug(playlist.name)}.m3u`, toM3u(rows), "audio/x-mpegurl");
+    notify("M3U playlist exported");
+  }
+
+  async function copyLinks() {
+    const links = rows
+      .map((row) => row.candidates?.[0])
+      .filter((video): video is VideoCandidate => Boolean(video))
+      .map((video) => watchUrl(video.videoId));
+    if (!links.length) {
+      notify("No matches to copy yet");
+      return;
+    }
+    const ok = await copyText(links.join("\n"));
+    notify(ok ? `${links.length} YouTube links copied` : "Couldn't copy links");
+  }
+
+  /* Keyboard shortcuts: / search, J/K navigate, Enter play, Esc close */
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      const typing =
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        target?.isContentEditable;
+
+      if (event.key === "/" && !typing) {
+        event.preventDefault();
+        if (searchRef.current) searchRef.current.focus();
+        else document.getElementById("playlist-link")?.focus();
+        return;
+      }
+
+      if (event.key === "Escape") {
+        if (player) setPlayer(null);
+        else if (typing) (target as HTMLElement).blur();
+        else if (query) setQuery("");
+        return;
+      }
+
+      if (typing) return;
+
+      if (event.key === "j" || event.key === "k") {
+        const items = Array.from(document.querySelectorAll<HTMLElement>(".track"));
+        if (!items.length) return;
+        event.preventDefault();
+        const index = items.indexOf(document.activeElement as HTMLElement);
+        const next =
+          index === -1
+            ? 0
+            : Math.min(items.length - 1, Math.max(0, index + (event.key === "j" ? 1 : -1)));
+        items[next]?.focus();
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [player, query]);
+
+  function onRowKeyDown(event: React.KeyboardEvent<HTMLUListElement>) {
+    if (event.key !== "Enter") return;
+    const item = (event.target as HTMLElement).closest<HTMLElement>(".track");
+    if (!item) return;
+    const index = Number(item.dataset.index);
+    const row = rows[index];
+    const video = row?.candidates?.[0];
+    if (row && video) {
+      event.preventDefault();
+      setPlayer({ track: row.track, video });
+    }
+  }
 
   return (
     <>
-      <a className="skip-link" href="#tracks">
-        Skip to results
-      </a>
+      {playlist && rows.length > 0 && (
+        <a className="skip-link" href="#results">
+          Skip to results
+        </a>
+      )}
 
-      <div className="shell">
+      <div
+        className="shell"
+        onDragOver={(event) => event.preventDefault()}
+      >
         <header className="topbar">
           <span className="brand">
             <span className="brand-mark" aria-hidden="true">
@@ -487,411 +600,153 @@ export default function Home() {
             </span>
             <span className="brand-name">SlowedMatch</span>
           </span>
-          <span className="topbar-note">Spotify playlist → slowed + reverb</span>
+          <span className="topbar-note">Spotify → slowed + reverb</span>
         </header>
 
         <main>
-          <section className={`hero${playlist ? " compact" : ""}`}>
-            <span className="badge">
-              <span className="badge-dot" aria-hidden="true" />
-              Free · no login · nothing downloaded
-            </span>
+          <Hero
+            compact={Boolean(playlist) || resolving}
+            url={url}
+            onUrlChange={setUrl}
+            onSubmit={() => void runPlaylist(url)}
+            onDemo={() => void runPlaylist(DEMO_URL)}
+            busy={resolving || running}
+            resolving={resolving}
+            running={running}
+            recents={recentItems}
+            onPickRecent={(entity) => void runPlaylist(entity.url)}
+          />
 
-            <h1>
-              Your playlist,
-              <br />
-              <span className="grad">slowed and reverbed.</span>
-            </h1>
-
-            <p className="lede">
-              Paste a public Spotify playlist. For every track, SlowedMatch finds a
-              slowed + reverb version on YouTube and lines it up next to your
-              original — with a confidence score instead of blind guesses.
-            </p>
-
-            <form
-              className="search"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void runPlaylist(url);
+          {!playlist && !resolving && (
+            <LibraryShelf
+              items={library}
+              disabled={resolving || running}
+              onOpen={(entity) => void runPlaylist(entity.url)}
+              onTogglePin={(id) => setLibrary(togglePin(id))}
+              onRemove={(entity) => {
+                setLibrary(removeFromLibrary(entity.id));
+                notify(`Removed “${entity.name}”`);
               }}
-            >
-              <label className="sr-only" htmlFor="playlist-url">
-                Spotify playlist link
-              </label>
-              <input
-                id="playlist-url"
-                className="search-input"
-                value={url}
-                onChange={(event) => setUrl(event.target.value)}
-                placeholder="https://open.spotify.com/playlist/…"
-                autoComplete="off"
-                spellCheck={false}
-                inputMode="url"
-                aria-describedby="playlist-hint"
-              />
-              <button
-                type="submit"
-                className="btn btn-primary"
-                disabled={resolving || running}
-              >
-                {resolving ? (
-                  <span className="spinner" aria-hidden="true" />
-                ) : (
-                  <SearchIcon />
-                )}
-                {resolving ? "Reading playlist…" : running ? "Searching…" : "Find matches"}
-              </button>
-            </form>
-
-            <div className="hero-foot" id="playlist-hint">
-              <button
-                type="button"
-                className="linkbtn"
-                onClick={() => {
-                  setUrl(DEMO_URL);
-                  void runPlaylist(DEMO_URL);
-                }}
-                disabled={resolving || running}
-              >
-                Try a demo playlist
-              </button>
-              <span className="dot-sep" aria-hidden="true">
-                ·
-              </span>
-              <span className="muted">Playlist, album, artist or track · public · up to {MAX_TRACKS} tracks</span>
-            </div>
-          </section>
-
-          {library.length > 0 && (
-            <section className="library" aria-label="Your saved searches">
-              <div className="library-head">
-                <h2 className="library-title">Your library</h2>
-                <span className="muted">
-                  {library.length} saved {library.length === 1 ? "item" : "items"} · stored on this device
-                </span>
-              </div>
-              <div className="library-grid">
-                {sortedLibrary.map((entity) => (
-                  <div
-                    className={`lib-card${entity.pinned ? " pinned" : ""}`}
-                    key={entity.id}
-                  >
-                    <button
-                      type="button"
-                      className="lib-open"
-                      onClick={() => {
-                        if (resolving || running) return;
-                        setUrl(entity.url);
-                        void runPlaylist(entity.url);
-                      }}
-                      disabled={resolving || running}
-                      aria-label={`Find matches for ${entity.name}`}
-                      title={`Find matches for ${entity.name}`}
-                    >
-                      {entity.pinned && (
-                        <span className="lib-pin-flag" aria-hidden="true">
-                          Pinned
-                        </span>
-                      )}
-                      {entity.cover ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={entity.cover} alt="" loading="lazy" width={64} height={64} />
-                      ) : (
-                        <span className="lib-cover placeholder" aria-hidden="true" />
-                      )}
-                      <span className="lib-body">
-                        <span className="lib-kind">{entity.kind}</span>
-                        <span className="lib-name">{entity.name}</span>
-                        <span className="lib-sub">
-                          {entity.owner ? `${entity.owner} · ` : ""}
-                          {entity.trackCount}{" "}
-                          {entity.trackCount === 1 ? "track" : "tracks"}
-                        </span>
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      className={`icon-btn lib-pin${entity.pinned ? " on" : ""}`}
-                      onClick={() => setLibrary(togglePin(entity.id))}
-                      aria-label={entity.pinned ? `Unpin ${entity.name}` : `Pin ${entity.name} to top`}
-                      aria-pressed={Boolean(entity.pinned)}
-                    >
-                      <PinIcon size={14} />
-                    </button>
-                    <button
-                      type="button"
-                      className="icon-btn lib-remove"
-                      onClick={() => {
-                        setLibrary(removeFromLibrary(entity.id));
-                        notify(`Removed “${entity.name}”`);
-                      }}
-                      aria-label={`Remove ${entity.name} from library`}
-                    >
-                      <CloseIcon size={14} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </section>
+            />
           )}
 
           {error && (
             <div className="alert" role="alert">
+              <span className="alert-icon" aria-hidden="true">
+                <AlertIcon />
+              </span>
               <div className="alert-text">
-                <strong>That didn&apos;t work.</strong>
+                <strong>That didn’t work</strong>
                 <span>{error}</span>
               </div>
               <button
                 type="button"
                 className="icon-btn"
                 onClick={() => setError(null)}
-                aria-label="Dismiss error"
+                aria-label="Dismiss"
               >
-                <CloseIcon />
+                <CloseIcon size={15} />
               </button>
             </div>
           )}
 
-          {!rows.length && !error && !resolving && (
-            <section className="steps" aria-label="How it works">
-              <article className="step">
-                <span className="step-n">01</span>
-                <h2>Paste a playlist</h2>
-                <p>Any public Spotify playlist link. No account, no API keys, no app.</p>
-              </article>
-              <article className="step">
-                <span className="step-n">02</span>
-                <h2>It hunts YouTube</h2>
-                <p>
-                  Every track gets searched for its slowed + reverb upload, then
-                  scored on title, artist, length and quality.
-                </p>
-              </article>
-              <article className="step">
-                <span className="step-n">03</span>
-                <h2>Play or export</h2>
-                <p>
-                  Stream inline, jump to YouTube, or export the whole pairing list
-                  as CSV or JSON.
-                </p>
-              </article>
-            </section>
-          )}
-
           {resolving && !playlist && (
-            <div className="resolving" role="status" aria-live="polite">
+            <div className="resolving" aria-live="polite">
               <span className="spinner" aria-hidden="true" />
-              Reading the playlist from Spotify…
+              Reading your Spotify link…
             </div>
           )}
 
           {playlist && (
-            <section className="plhead">
-              {playlist.cover ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  className="plcover"
-                  src={playlist.cover}
-                  alt={`${playlist.name} cover`}
-                  width={84}
-                  height={84}
+            <>
+              <PlaylistHeader
+                playlist={playlist}
+                matchedCount={matchedIds.length}
+                queueParts={queueParts}
+                onPlayAll={() => {
+                  window.open(queueParts[0]?.url, "_blank", "noopener,noreferrer");
+                  notify(
+                    queueParts.length > 1
+                      ? `Part 1/${queueParts.length} — play the rest from the menu`
+                      : "Opening YouTube queue",
+                  );
+                }}
+                onPlayPart={(partUrl) => {
+                  window.open(partUrl, "_blank", "noopener,noreferrer");
+                  notify("Opening YouTube queue");
+                }}
+                onExport={(format) => {
+                  if (format === "csv") exportCsv();
+                  else if (format === "json") exportJson();
+                  else exportM3u();
+                }}
+                onCopyLinks={() => void copyLinks()}
+                onNewSearch={newSearch}
+              />
+
+              {rows.length > 0 && (
+                <ProgressPanel
+                  settled={settled}
+                  total={total}
+                  percent={percent}
+                  eta={eta}
+                  running={running}
+                  pending={pendingCount}
+                  stats={stats}
+                  concurrency={concurrency}
+                  onConcurrency={changeConcurrency}
+                  onStop={stopSearch}
+                  onResume={resumeSearch}
+                  onRetryFailed={() => {
+                    const failed = rows
+                      .filter((row) => row.status === "error")
+                      .map((row) => row.track);
+                    if (!failed.length) return;
+                    const controller = new AbortController();
+                    abortRef.current = controller;
+                    setRunning(true);
+                    void runQueue(failed, controller.signal);
+                  }}
                 />
-              ) : (
-                <span className="plcover placeholder" aria-hidden="true" />
               )}
 
-              <div className="plhead-meta">
-                <span className="eyebrow">
-                  {playlist.kind === "playlist" ? "Spotify playlist" : `Spotify ${playlist.kind}`}
-                </span>
-                <h2>{playlist.name}</h2>
-                <p>
-                  {playlist.owner ? `${playlist.owner} · ` : ""}
-                  {playlist.tracks.length} tracks
-                  {playlist.truncated ? " (Spotify shares the first 100)" : ""}
-                </p>
-              </div>
+              <Toolbar
+                filter={filter}
+                onFilter={setFilter}
+                counts={filterCounts}
+                query={query}
+                onQuery={setQuery}
+                searchRef={searchRef}
+                shown={filteredRows.length}
+                total={total}
+              />
 
-              <div className="plhead-actions">
-                {queueParts.length > 0 && (
-                  <div className="split">
-                    <a
-                      className="btn btn-ghost"
-                      href={queueParts[0].url}
-                      target="_blank"
-                      rel="noreferrer noopener"
-                      title={
-                        queueParts.length > 1
-                          ? `All ${matchedIds.length} matches · YouTube queues max 50 videos, so this opens part 1 of ${queueParts.length}`
-                          : "Open all matches as one YouTube playlist"
-                      }
-                      onClick={() =>
-                        notify(
-                          queueParts.length > 1
-                            ? `Opening part 1/${queueParts.length} · play from the menu for the rest`
-                            : "Opening YouTube playlist…",
-                        )
-                      }
-                    >
-                      <PlayIcon size={13} />
-                      Play all
-                    </a>
-                    {queueParts.length > 1 && (
-                      <>
-                        <button
-                          type="button"
-                          className="btn btn-ghost split-caret"
-                          aria-expanded={partsOpen}
-                          aria-haspopup="menu"
-                          aria-label={`Playlist parts (${queueParts.length})`}
-                          onClick={() => setPartsOpen((open) => !open)}
-                        >
-                          <ChevronDownIcon size={13} />
-                        </button>
-                        {partsOpen && (
-                          <div className="parts-menu" role="menu" aria-label="Queue parts">
-                            {queueParts.map((part, index) => (
-                              <a
-                                key={part.url}
-                                role="menuitem"
-                                href={part.url}
-                                target="_blank"
-                                rel="noreferrer noopener"
-                                onClick={() => setPartsOpen(false)}
-                              >
-                                Part {index + 1}
-                                <span>matches {part.from}–{part.to}</span>
-                              </a>
-                            ))}
-                          </div>
-                        )}
-                      </>
-                    )}
-                  </div>
-                )}
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  onClick={() => void exportCsv()}
-                  disabled={!stats.done}
-                >
-                  Export CSV
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  onClick={() => void exportJson()}
-                  disabled={!stats.done}
-                >
-                  JSON
-                </button>
-              </div>
-            </section>
-          )}
-
-          {rows.length > 0 && (
-            <>
-              <div className="progress-block">
-                <div className="progress-meta">
-                  <span>
-                    {settled} of {total} checked
-                    {eta > 0 && running ? ` · ~${eta}s left` : ""}
-                  </span>
-                  <span className="progress-summary">
-                    <b className="good">{stats.high}</b> good
-                    <span className="dot-sep" aria-hidden="true">·</span>
-                    <b className="warn">{stats.medium}</b> likely
-                    <span className="dot-sep" aria-hidden="true">·</span>
-                    <b>{stats.none}</b> none
-                  </span>
-                </div>
-                <div
-                  className="progress"
-                  role="progressbar"
-                  aria-valuemin={0}
-                  aria-valuemax={total}
-                  aria-valuenow={settled}
-                  aria-label="Tracks checked"
-                >
-                  <span
-                    className={running ? "bar live" : "bar"}
-                    style={{ width: `${percent}%` }}
-                  />
-                </div>
-              </div>
-
-              <div className="toolbar">
-                <span
-                  className="toolbar-line"
-                  style={{ width: `${percent}%` }}
-                  aria-hidden="true"
-                />
-
-                <div className="chips" role="tablist" aria-label="Filter by match quality">
-                  {FILTERS.map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      role="tab"
-                      aria-selected={filter === item.id}
-                      className={`chip${filter === item.id ? " active" : ""}`}
-                      onClick={() => setFilter(item.id)}
-                      disabled={filterCount[item.id] === 0 && item.id !== "all"}
-                    >
-                      {item.label}
-                      <span className="chip-count">{filterCount[item.id]}</span>
-                    </button>
-                  ))}
-                </div>
-
-                <div className="toolbar-right">
-                  <label className="mini-search">
-                    <span className="sr-only">Search tracks or artists</span>
-                    <SearchIcon size={14} />
-                    <input
-                      value={query}
-                      onChange={(event) => setQuery(event.target.value)}
-                      placeholder="Search tracks or artists"
-                      type="search"
+              <ul className="tracks" id="results" onKeyDown={onRowKeyDown}>
+                {filteredRows.map((row) => {
+                  const index = rows.indexOf(row);
+                  return (
+                    <TrackRow
+                      key={row.track.id || index}
+                      row={row}
+                      index={index}
+                      expanded={expanded.has(row.track.id)}
+                      playingId={player?.video.videoId}
+                      favorites={favoriteSet}
+                      onToggle={() => toggleRow(row.track.id)}
+                      onPlay={(video) => playRow(row.track, video)}
+                      onRetry={() => retryRow(row.track)}
+                      onFavorite={favoriteVideo}
                     />
-                  </label>
-
-                  {running ? (
-                    <button type="button" className="btn-mini" onClick={stop}>
-                      Stop
-                    </button>
-                  ) : (
-                    pendingCount > 0 && (
-                      <button type="button" className="btn-mini" onClick={() => void resume()}>
-                        Resume
-                      </button>
-                    )
-                  )}
-                </div>
-              </div>
-
-              <ol className="tracks" id="tracks">
-                {filteredRows.map((row) => (
-                  <TrackRow
-                    key={row.track.id}
-                    row={row}
-                    index={indexById.get(row.track.id) ?? 0}
-                    expanded={expanded.has(row.track.id)}
-                    playingId={player?.video.videoId}
-                    onToggle={() => toggleExpanded(row.track.id)}
-                    onPlay={(video) => setPlayer({ track: row.track, video })}
-                    onRetry={() => void retryOne(row.track)}
-                  />
-                ))}
-              </ol>
+                  );
+                })}
+              </ul>
 
               {!filteredRows.length && (
                 <div className="empty-filter">
-                  <p>No tracks match this filter.</p>
+                  <p>Nothing here matches that filter.</p>
                   <button
                     type="button"
-                    className="linkbtn"
+                    className="btn-mini"
                     onClick={() => {
                       setFilter("all");
                       setQuery("");
@@ -903,40 +758,40 @@ export default function Home() {
               )}
             </>
           )}
+
+          {!playlist && !resolving && <EmptyState />}
         </main>
 
         <footer className="footer">
-          <span>
-            SlowedMatch links out to YouTube. Nothing is downloaded, ripped or
-            re-hosted.
-          </span>
+          <span>SlowedMatch links out to YouTube. Nothing is downloaded or re-hosted.</span>
           <span className="footer-dim">Personal use · built for slow nights</span>
         </footer>
       </div>
 
-      {rows.length > 3 && showTop && (
+      {rows.length > 4 && showTop && (
         <button
           type="button"
           className="fab"
           onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
           aria-label="Back to top"
         >
-          <ArrowUpIcon size={18} />
+          <ArrowUpIcon size={17} />
         </button>
       )}
 
-      {toast && (
-        <div className="toast" role="status">
-          {toast}
-        </div>
-      )}
+      <Toast message={toast} />
 
       {player && (
-        <PlayerBar
+        <MiniPlayer
           track={player.track}
           video={player.video}
+          saved={favoriteSet.has(player.video.videoId)}
           onClose={() => setPlayer(null)}
           onNext={playNext}
+          onFavorite={() => favoriteVideo(player.video)}
+          onExpand={() =>
+            window.open(watchUrl(player.video.videoId), "_blank", "noopener,noreferrer")
+          }
         />
       )}
     </>

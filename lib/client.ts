@@ -132,6 +132,76 @@ export function togglePin(id: string): SavedEntity[] {
 }
 
 /* ------------------------------------------------------------------ */
+/* Favorites                                                           */
+/* ------------------------------------------------------------------ */
+
+const FAVORITES_KEY = `${NS}:favorites`;
+
+export function getFavorites(): string[] {
+  const list = read<string[]>(FAVORITES_KEY);
+  return Array.isArray(list) ? list : [];
+}
+
+export function toggleFavorite(videoId: string): string[] {
+  const current = getFavorites();
+  const next = current.includes(videoId)
+    ? current.filter((id) => id !== videoId)
+    : [videoId, ...current];
+  write(FAVORITES_KEY, next);
+  return next;
+}
+
+/* ------------------------------------------------------------------ */
+/* Export helpers                                                      */
+/* ------------------------------------------------------------------ */
+
+export function toM3u(rows: { track: Track; candidates?: VideoCandidate[] }[]): string {
+  const lines = ["#EXTM3U"];
+  for (const { track, candidates } of rows) {
+    const best = candidates?.[0];
+    if (!best) continue;
+    const seconds = Math.round((track.durationMs ?? 0) / 1000);
+    const label = `${track.artist} - ${track.title}`;
+    lines.push(`#EXTINF:${seconds},${label}`);
+    lines.push(watchUrl(best.videoId));
+  }
+  return lines.join("\n") + "\n";
+}
+
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    try {
+      const area = document.createElement("textarea");
+      area.value = text;
+      area.style.position = "fixed";
+      area.style.opacity = "0";
+      document.body.appendChild(area);
+      area.select();
+      const ok = document.execCommand("copy");
+      area.remove();
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+}
+
+export function timeAgo(timestamp: number): string {
+  const diff = Date.now() - timestamp;
+  const minutes = Math.round(diff / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  return `${Math.round(days / 30)}mo ago`;
+}
+
+/* ------------------------------------------------------------------ */
 
 export function formatDuration(ms?: number): string {
   if (!ms || ms < 0) return "";

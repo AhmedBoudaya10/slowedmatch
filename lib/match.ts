@@ -7,6 +7,10 @@ import type {
   VideoCandidate,
 } from "./types";
 
+/* ------------------------------------------------------------------ */
+/* Stage 1 — normalize                                                */
+/* ------------------------------------------------------------------ */
+
 const STOP_WORDS = new Set([
   "the", "a", "an", "and", "of", "to", "in", "on", "for", "with", "my", "me",
   "i", "you", "it", "is", "at", "by", "feat", "ft", "featuring", "prod",
@@ -66,8 +70,80 @@ function stripFeature(input: string): string {
     .trim();
 }
 
-/** Score how much of the track title appears in a video title. */
-function titleSimilarity(trackTitle: string, videoTitle: string): number {
+/** Remove marketing cruft Spotify sometimes carries in titles. */
+function stripNoise(input: string): string {
+  return input
+    .replace(
+      /[([{](?:official|lyrics?|audio|video|visualizer|hd|4k|explicit|clean|remaster(?:ed)?|mono|stereo|deluxe|anniversary|bonus)[^)\]}]*[)\]}]]/gi,
+      " ",
+    )
+    .replace(/\s*[-–—]\s*(?:remaster(?:ed)?(?:\s*\d{4})?|radio edit|single version|album version)\s*$/i, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+export type NormalizedTrack = {
+  title: string;
+  coreTitle: string;
+  artists: string[];
+  primaryArtist: string;
+  durationSec: number;
+};
+
+export function normalizeTrack(track: Track): NormalizedTrack {
+  const title = stripNoise(stripFeature(track.title)) || track.title;
+  const artists = track.artist
+    .split(/\s*(?:,|&|feat\.?|ft\.?|\bx\b|×)\s*/i)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  return {
+    title,
+    coreTitle: title,
+    artists,
+    primaryArtist: artists[0] ?? "",
+    durationSec: track.durationMs ? Math.round(track.durationMs / 1000) : 0,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Query variants                                                     */
+/* ------------------------------------------------------------------ */
+
+export function buildQueries(track: Track): string[] {
+  const { coreTitle, primaryArtist } = normalizeTrack(track);
+  const title = coreTitle || track.title;
+
+  const queries = [
+    `${title} ${primaryArtist} slowed reverb`,
+    `${title} slowed + reverb`,
+    `${title} ${primaryArtist} slowed down`,
+  ];
+
+  return [...new Set(queries.map((q) => q.replace(/\s{2,}/g, " ").trim()).filter(Boolean))];
+}
+
+/* ------------------------------------------------------------------ */
+/* Stage 3 — weighted scoring                                         */
+/* ------------------------------------------------------------------ */
+
+export const SIGNAL_WEIGHTS = {
+  title: 0.3,
+  artist: 0.25,
+  duration: 0.15,
+  evidence: 0.2,
+  quality: 0.1,
+} as const;
+
+type Signals = {
+  title: number;
+  artist: number;
+  duration: number;
+  evidence: number;
+  quality: number;
+};
+
+function titleSignal(trackTitle: string, videoTitle: string): number {
   const variants = [trackTitle, stripFeature(trackTitle), trackTitle.split(" - ")[0]];
   const video = ` ${norm(videoTitle)} `;
 
@@ -87,9 +163,9 @@ function titleSimilarity(trackTitle: string, videoTitle: string): number {
     const ratio = hits / wanted.length;
 
     let score = 0;
-    if (ratio >= 0.75) score = 0.8;
-    else if (ratio >= 0.5) score = 0.45;
-    else if (ratio >= 0.34) score = 0.2;
+    if (ratio >= 0.85) score = 0.9;
+    else if (ratio >= 0.6) score = 0.7;
+    else if (ratio >= 0.4) score = 0.4;
 
     if (score > best) best = score;
   }
@@ -97,127 +173,148 @@ function titleSimilarity(trackTitle: string, videoTitle: string): number {
   return best;
 }
 
-function artistHit(artist: string, videoTitle: string, channel: string): boolean {
-  const parts = artist
-    .split(/\s*(?:,|&|feat\.?|ft\.?|\bx\b|×)\s*/i)
+function artistSignal(normalized: NormalizedTrack, videoTitle: string, channel: string): number {
+  const { artists } = normalized;
+  if (!artists.length) return 0.5;
+
+  const title = ` ${norm(videoTitle)} `;
+  const chan = ` ${norm(channel)} `;
+  const parts = artists
     .map((part) => norm(part))
     .filter((part) => part.length >= 2);
 
-  if (!parts.length) return false;
+  if (!parts.length) return 0.5;
 
-  const haystack = ` ${norm(videoTitle)} ${norm(channel)} `;
-  return parts.some((part) => haystack.includes(part));
-}
-
-export function scoreVideo(track: Track, video: RawVideo): VideoCandidate | null {
-  const title = norm(video.title);
-  const channel = norm(video.channel);
-
-  if (HARD_BLOCK.some((pattern) => pattern.test(title))) return null;
-
-  const similarity = titleSimilarity(track.title, video.title);
-  if (similarity < 0.34) return null;
-
-  const slowed = /\bslow(?:ed|ing)?\b/.test(title) || /\bslowed\s*down\b/.test(title);
-  const reverb = /\breverb/.test(title);
-  if (!slowed && !reverb) return null;
-
-  const reasons: string[] = [];
-  let score = similarity * 4;
-
-  reasons.push(
-    similarity === 1
-      ? "exact title"
-      : similarity >= 0.8
-        ? "strong title match"
-        : "partial title match",
-  );
-
-  if (artistHit(track.artist, video.title, video.channel)) {
-    score += 1.2;
-    reasons.push("artist match");
-  } else {
-    score -= 0.3;
-  }
-
-  if (slowed) {
-    score += 1.4;
-    reasons.push("slowed");
-  }
-  if (reverb) {
-    score += 1.2;
-    reasons.push("reverb");
-  }
-  if (slowed && reverb) score += 0.6;
-
-  const trackSeconds = track.durationMs ? track.durationMs / 1000 : 0;
-  if (trackSeconds > 20 && video.durationSec) {
-    const ratio = video.durationSec / trackSeconds;
-    if (ratio >= 0.95 && ratio <= 1.8) {
-      score += 1.4;
-      reasons.push(`length fits (${ratio.toFixed(2)}×)`);
-    } else if (ratio >= 0.85 && ratio <= 2.2) {
-      score += 0.3;
-    } else if (ratio > 2.2) {
-      score -= 1.8;
-    } else {
-      score -= 0.6;
+  let best = 0;
+  for (const part of parts) {
+    if (title.includes(part) || chan.includes(part)) best = Math.max(best, 1);
+    else {
+      const words = part.split(" ").filter((w) => w.length > 3);
+      if (words.some((w) => title.includes(w) || chan.includes(w))) {
+        best = Math.max(best, 0.55);
+      }
     }
   }
 
+  return best;
+}
+
+function durationSignal(trackSeconds: number, videoSeconds: number | null): number {
+  if (!trackSeconds || !videoSeconds) return 0.5;
+
+  const ratio = videoSeconds / trackSeconds;
+
+  // Slowed versions run longer than the original: 0.95×–1.5× is ideal.
+  if (ratio >= 0.95 && ratio <= 1.5) return 1;
+  if (ratio >= 0.85 && ratio <= 1.8) return 0.7;
+  if (ratio >= 0.7 && ratio <= 2.2) return 0.35;
+  if (ratio > 2.2) return 0;
+  return 0.15;
+}
+
+function evidenceSignal(videoTitle: string): { value: number; slowed: boolean; reverb: boolean } {
+  const title = norm(videoTitle);
+  const slowed = /\bslow(?:ed|ing)?\b/.test(title) || /\bslowed\s*down\b/.test(title);
+  const reverb = /\breverb/.test(title);
+
+  if (slowed && reverb) return { value: 1, slowed, reverb };
+  if (slowed) return { value: 0.55, slowed, reverb };
+  if (reverb) return { value: 0.4, slowed, reverb };
+  return { value: 0, slowed, reverb };
+}
+
+function qualitySignal(video: RawVideo, channel: string): number {
+  let value = 0.4;
+
+  if (video.views) value += Math.min(0.4, Math.log10(video.views + 1) / 16);
   if (video.durationSec) {
-    if (video.durationSec > 600) score -= 1.5;
-    if (video.durationSec < 45) score -= 1.5;
+    if (video.durationSec >= 45) value += 0.1;
+    if (video.durationSec > 720) value -= 0.35;
   }
 
-  if (video.views) {
-    score += Math.min(0.5, Math.log10(video.views + 1) / 14);
-  }
+  const channelNorm = norm(channel);
+  if (/\btopic\b|\bvevo\b/.test(channelNorm)) value -= 0.2;
+  if (/\bslowed\b|\breverb\b|\baesthetic\b/.test(channelNorm)) value += 0.1;
 
-  if (/\b(topic|vevo)\b/.test(channel)) score -= 0.5;
+  return Math.max(0, Math.min(1, value));
+}
+
+export function scoreVideo(track: Track, video: RawVideo): VideoCandidate | null {
+  const normalized = normalizeTrack(track);
+  const videoTitle = norm(video.title);
+
+  if (HARD_BLOCK.some((pattern) => pattern.test(videoTitle))) return null;
+
+  const signals: Signals = {
+    title: titleSignal(normalized.title, video.title),
+    artist: artistSignal(normalized, video.title, video.channel),
+    duration: durationSignal(normalized.durationSec, video.durationSec),
+    evidence: evidenceSignal(video.title).value,
+    quality: qualitySignal(video, video.channel),
+  };
+
+  // A candidate must at least mention the song and a slowed/reverb treatment.
+  if (signals.title < 0.34) return null;
+  if (signals.evidence === 0) return null;
+
+  const weighted =
+    signals.title * SIGNAL_WEIGHTS.title +
+    signals.artist * SIGNAL_WEIGHTS.artist +
+    signals.duration * SIGNAL_WEIGHTS.duration +
+    signals.evidence * SIGNAL_WEIGHTS.evidence +
+    signals.quality * SIGNAL_WEIGHTS.quality;
+
+  const score = Math.round(weighted * 1000) / 10; // 0–100, one decimal
+
+  const { slowed, reverb } = evidenceSignal(video.title);
+  const reasons: string[] = [];
+  if (signals.title === 1) reasons.push("exact title");
+  else if (signals.title >= 0.7) reasons.push("strong title");
+  else reasons.push("partial title");
+  if (signals.artist >= 0.9) reasons.push("artist match");
+  else if (signals.artist >= 0.5) reasons.push("artist in channel");
+  if (slowed) reasons.push("slowed");
+  if (reverb) reasons.push("reverb");
+  if (normalized.durationSec && video.durationSec) {
+    const ratio = video.durationSec / normalized.durationSec;
+    if (ratio >= 0.95 && ratio <= 1.5) reasons.push(`length fits ${ratio.toFixed(2)}×`);
+  }
 
   const confidence: Confidence =
-    score >= 6.2 && similarity >= 0.8 && slowed && reverb
+    score >= 78 && signals.title >= 0.85 && slowed && reverb && signals.artist >= 0.5
       ? "high"
-      : score >= 4.4 && similarity >= 0.5
+      : score >= 58 && signals.title >= 0.6
         ? "medium"
         : "low";
 
   return {
     ...video,
-    score: Math.round(score * 100) / 100,
+    score,
     confidence,
     reasons,
+    breakdown: {
+      title: Math.round(signals.title * SIGNAL_WEIGHTS.title * 100),
+      artist: Math.round(signals.artist * SIGNAL_WEIGHTS.artist * 100),
+      duration: Math.round(signals.duration * SIGNAL_WEIGHTS.duration * 100),
+      evidence: Math.round(signals.evidence * SIGNAL_WEIGHTS.evidence * 100),
+      quality: Math.round(signals.quality * SIGNAL_WEIGHTS.quality * 100),
+    },
   };
 }
 
-function queryTitle(title: string): string {
-  return stripFeature(title)
-    .replace(/\((?:official|lyrics?|audio|video|visualizer|hd|4k|explicit|clean|remaster(?:ed)?)[^)]*\)/gi, " ")
-    .replace(/\[(?:official|lyrics?|audio|video|visualizer|hd|4k|explicit|clean|remaster(?:ed)?)[^\]]*\]/gi, " ")
-    .replace(/\s{2,}/g, " ")
-    .trim();
-}
+/* ------------------------------------------------------------------ */
+/* Stages 2 + 4 + 5 — retrieval, rejection, confidence                 */
+/* ------------------------------------------------------------------ */
 
-export function buildQueries(track: Track): string[] {
-  const title = queryTitle(track.title) || track.title;
-  const artist = track.artist.split(/\s*(?:,|&|feat\.?|ft\.)\s*/i)[0]?.trim() ?? "";
-
-  const queries = [
-    `${title} ${artist} slowed reverb`.replace(/\s{2,}/g, " ").trim(),
-    `${title} slowed + reverb`,
-    `${title} ${artist} slowed down`.replace(/\s{2,}/g, " ").trim(),
-  ];
-
-  return [...new Set(queries)];
-}
+const MAX_QUERIES = 3;
+const HIGH_CONFIDENCE_STOP = 80;
 
 export async function findMatches(track: Track): Promise<SearchResponse> {
   const queries = buildQueries(track);
   const pool = new Map<string, VideoCandidate>();
   let via = "none";
 
-  for (let i = 0; i < queries.length; i++) {
+  for (let i = 0; i < Math.min(queries.length, MAX_QUERIES); i++) {
     const outcome = await searchYouTube(queries[i]);
     if (outcome.videos.length) via = outcome.via;
 
@@ -231,7 +328,7 @@ export async function findMatches(track: Track): Promise<SearchResponse> {
     }
 
     const best = [...pool.values()].sort((a, b) => b.score - a.score)[0];
-    if (best && best.confidence !== "low") break;
+    if (best && best.score >= HIGH_CONFIDENCE_STOP) break;
     if (i === 1 && pool.size > 0) break;
   }
 
