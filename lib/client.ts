@@ -1,4 +1,5 @@
-import type { PlaylistResult, Track, VideoCandidate } from "./types";
+import type { MatchMode, PlaylistResult, Track, VideoCandidate } from "./types";
+import { modeLabel } from "./modes";
 
 const NS = "slowedmatch:v1";
 const MATCH_TTL = 14 * 24 * 60 * 60 * 1000;
@@ -38,21 +39,40 @@ type CachedMatch = {
   via: string;
 };
 
-function matchKey(track: Track): string {
+function legacyMatchKey(track: Track): string {
   return `${NS}:match:${normKey(track.title)}|${normKey(track.artist)}`;
 }
 
-export function getCachedMatch(track: Track): CachedMatch | null {
-  const data = read<CachedMatch>(matchKey(track));
+function matchKey(track: Track, mode: MatchMode): string {
+  return `${NS}:match:${mode}:${normKey(track.title)}|${normKey(track.artist)}`;
+}
+
+export function getCachedMatch(
+  track: Track,
+  mode: MatchMode,
+): CachedMatch | null {
+  const key = matchKey(track, mode);
+  let data = read<CachedMatch>(key);
+
+  // Preserve slowed matches cached before version switching existed.
+  if (!data && mode === "slowed") {
+    const legacy = read<CachedMatch>(legacyMatchKey(track));
+    if (legacy) {
+      write(key, legacy);
+      data = legacy;
+    }
+  }
+
   if (!data?.at || Date.now() - data.at > MATCH_TTL) return null;
   return data;
 }
 
 export function setCachedMatch(
   track: Track,
+  mode: MatchMode,
   value: { candidates: VideoCandidate[]; query: string; via: string },
 ): void {
-  write(matchKey(track), { at: Date.now(), ...value });
+  write(matchKey(track, mode), { at: Date.now(), ...value });
 }
 
 export function getCachedPlaylist(url: string): PlaylistResult | null {
@@ -238,8 +258,14 @@ export function playAllUrl(videoIds: string[], max = 50): string {
   return `https://www.youtube.com/watch_videos?video_ids=${videoIds.slice(0, max).join(",")}`;
 }
 
-export function searchUrl(track: Track): string {
-  const query = `${track.title} ${track.artist} slowed reverb`;
+export function searchUrl(track: Track, mode: MatchMode = "slowed"): string {
+  const suffix =
+    mode === "slowed"
+      ? "slowed reverb"
+      : mode === "instrumental"
+        ? "instrumental"
+        : "sped up";
+  const query = `${track.title} ${track.artist} ${suffix}`;
   return `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
 }
 
@@ -261,11 +287,15 @@ function csvCell(value: string): string {
   return `"${value.replace(/"/g, '""')}"`;
 }
 
-export function toCsv(rows: { track: Track; candidates?: VideoCandidate[] }[]): string {
+export function toCsv(
+  rows: { track: Track; candidates?: VideoCandidate[] }[],
+  mode: MatchMode = "slowed",
+): string {
   const header = [
     "Track",
     "Artist",
     "Album",
+    "Version",
     "Match confidence",
     "Video title",
     "Channel",
@@ -279,6 +309,7 @@ export function toCsv(rows: { track: Track; candidates?: VideoCandidate[] }[]): 
       track.title,
       track.artist,
       track.album ?? "",
+      modeLabel(mode),
       best?.confidence ?? "none",
       best?.title ?? "",
       best?.channel ?? "",
@@ -295,6 +326,7 @@ export function toCsv(rows: { track: Track; candidates?: VideoCandidate[] }[]): 
 export function toJson(
   playlist: PlaylistResult,
   rows: { track: Track; candidates?: VideoCandidate[] }[],
+  mode: MatchMode = "slowed",
 ): string {
   return JSON.stringify(
     {
@@ -304,6 +336,8 @@ export function toJson(
         url: `https://open.spotify.com/playlist/${playlist.id}`,
         total: playlist.total,
       },
+      version: mode,
+      versionLabel: modeLabel(mode),
       exportedAt: new Date().toISOString(),
       tracks: rows.map(({ track, candidates }) => ({
         track,

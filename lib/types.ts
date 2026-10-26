@@ -22,6 +22,9 @@ export type PlaylistResult = {
   note?: string;
 };
 
+/** Which alternate version we are matching for. */
+export type MatchMode = "slowed" | "instrumental" | "spedup";
+
 export type RawVideo = {
   videoId: string;
   title: string;
@@ -51,6 +54,7 @@ export type VideoCandidate = RawVideo & {
 export type SearchResponse = {
   query: string;
   via: string;
+  mode: MatchMode;
   candidates: VideoCandidate[];
 };
 

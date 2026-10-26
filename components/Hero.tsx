@@ -32,17 +32,17 @@ export default function Hero({
         <div className="hero-copy">
           <span className="badge">
             <span className="badge-dot" aria-hidden="true" />
-            Free · no login · nothing downloaded
+            Slowed · instrumental · sped up — free, no login
           </span>
           <h1>
             Your playlist,
             <br />
-            <span className="grad">slowed and reverbed.</span>
+            <span className="grad">every version.</span>
           </h1>
           <p className="lede">
-            Paste a public Spotify playlist. SlowedMatch finds the best slowed + reverb
-            version of every track on YouTube — scored on title, artist, length and
-            treatment, so you can trust what you hear.
+            Paste a public Spotify link. AltMatch finds slowed + reverb, instrumental
+            and sped-up versions of every track on YouTube — scored on title, artist,
+            length and treatment, so you can trust what you hear.
           </p>
         </div>
       ) : (

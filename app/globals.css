@@ -1,5 +1,5 @@
 /* ================================================================== */
-/* SlowedMatch — design system                                        */
+/* AltMatch — design system                                           */
 /* ================================================================== */
 
 :root {
@@ -945,6 +945,124 @@ p {
 
 .menu-wrap {
   position: relative;
+}
+
+/* ------------------------------------------------------------------ */
+/* Version switcher                                                   */
+/* ------------------------------------------------------------------ */
+
+.modebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin: 0 0 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-1);
+  box-shadow: var(--inset-hi);
+}
+
+.modebar-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.modebar-copy p {
+  max-width: 300px;
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+
+.modes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  width: min(540px, 100%);
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.mode {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-2);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 0.16s var(--ease),
+    border-color 0.16s var(--ease),
+    color 0.16s var(--ease);
+}
+
+.mode:hover {
+  background: var(--surface-1);
+  color: var(--text);
+}
+
+.mode.active {
+  border-color: rgba(155, 140, 255, 0.45);
+  background: linear-gradient(
+    160deg,
+    rgba(155, 140, 255, 0.2),
+    rgba(103, 212, 255, 0.07)
+  );
+  color: var(--text);
+  box-shadow: var(--inset-hi);
+}
+
+.mode-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.mode-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--muted-2);
+  transition:
+    background 0.16s var(--ease),
+    box-shadow 0.16s var(--ease);
+}
+
+.mode.active .mode-dot {
+  background: var(--accent);
+  box-shadow:
+    0 0 0 3px rgba(155, 140, 255, 0.14),
+    0 0 12px rgba(155, 140, 255, 0.9);
+}
+
+.mode.is-running .mode-dot {
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.mode-hint {
+  font-size: 0.63rem;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.mode.active .mode-hint {
+  color: #b7aaff;
 }
 
 /* ------------------------------------------------------------------ */
@@ -2002,6 +2120,20 @@ body:has(.playerbar) .footer {
     flex: none;
   }
 
+  .modebar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .modebar-copy p {
+    max-width: none;
+  }
+
+  .modes {
+    width: 100%;
+  }
+
   .plhead-actions > .btn-ghost {
     flex: none;
     width: 42px;
@@ -2022,6 +2154,19 @@ body:has(.playerbar) .footer {
 
   .topbar {
     padding-top: calc(18px + env(safe-area-inset-top, 0px));
+  }
+
+  .topbar-note {
+    display: none;
+  }
+
+  .toast {
+    top: calc(68px + env(safe-area-inset-top, 0px));
+    right: 14px;
+    left: 14px;
+    max-width: none;
+    justify-content: center;
+    border-radius: 14px;
   }
 
   .hero {
@@ -2243,9 +2388,39 @@ body:has(.playerbar) .footer {
     padding: 14px;
   }
 
+  .mode {
+    padding: 7px 8px;
+  }
+
+  .mode-top {
+    font-size: 0.74rem;
+  }
+
+  .mode-hint {
+    font-size: 0.6rem;
+  }
+
   .progress-stats {
     gap: 10px;
     font-size: 0.7rem;
+  }
+}
+
+@media (max-width: 380px) {
+  .modes {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .mode {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    padding: 9px 11px;
+  }
+
+  .mode-hint {
+    font-size: 0.66rem;
   }
 }
 

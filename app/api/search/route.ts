@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { findMatches } from "@/lib/match";
+import { MODES } from "@/lib/modes";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -10,6 +11,8 @@ export async function GET(request: Request) {
   const song = (searchParams.get("song") ?? "").trim();
   const artist = (searchParams.get("artist") ?? "").trim();
   const durationParam = Number(searchParams.get("dur") ?? 0);
+  // Unknown modes fall back to the default so old links keep working.
+  const mode = MODES.find((item) => item.id === searchParams.get("mode"))?.id ?? "slowed";
 
   if (!song) {
     return NextResponse.json({ error: "Missing song title." }, { status: 400 });
@@ -22,12 +25,15 @@ export async function GET(request: Request) {
     Number.isFinite(durationParam) && durationParam > 0 ? durationParam : undefined;
 
   try {
-    const result = await findMatches({
-      id: "",
-      title: song,
-      artist,
-      durationMs: durationSec ? durationSec * 1000 : undefined,
-    });
+    const result = await findMatches(
+      {
+        id: "",
+        title: song,
+        artist,
+        durationMs: durationSec ? durationSec * 1000 : undefined,
+      },
+      mode,
+    );
 
     return NextResponse.json(result, {
       headers: {

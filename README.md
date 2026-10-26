@@ -1,14 +1,18 @@
-# SlowedMatch
+# AltMatch
 
-Paste a public Spotify playlist, album, artist or track link and get the best
-**slowed + reverb** version of every track on YouTube — scored, compared, and
-ready to play.
+Paste a public Spotify playlist, album, artist or track link and get **slowed +
+reverb**, **instrumental**, or **sped-up** versions of every track on YouTube —
+scored, compared, and ready to play.
 
-Free, no login, no downloads. SlowedMatch only links to and embeds existing
-YouTube videos.
+Free, no login, no downloads. AltMatch only links to and embeds existing YouTube
+videos.
 
 ## Features
 
+- **Three versions per track** — slowed + reverb, instrumental and sped up.
+  Pick a version after importing; each is searched and scored separately.
+- **Instant switching** — results are cached per version, so moving between
+  versions is immediate once a version has been searched.
 - **Every Spotify link type** — playlist, album, artist and single track.
 - **Transparent matching** — every candidate is scored on five weighted signals
   and labelled `Match`, `Likely` or `Review`. The numeric score and its
@@ -21,50 +25,73 @@ YouTube videos.
   the `Saved` chip.
 - **Library** — recent playlists/albums/artists are saved on device, with
   pin-to-top and one-tap re-run.
-- **Export** — CSV, JSON, M3U, or copy all YouTube links to the clipboard.
+- **Export** — CSV, JSON, M3U, or copy all YouTube links to the clipboard. The
+  exports record which version they contain.
 - **Resumable batch search** — concurrency 2–6, per-track retry, stop/resume, and
-  a persistent match cache so re-opening a playlist is instant.
+  a persistent per-version match cache so re-opening a playlist is instant.
 - **Accessible by default** — full keyboard navigation, focus-visible rings,
   live regions, reduced-motion and high-contrast support.
 
 ## Matching pipeline
 
-`lib/match.ts` runs five explicit stages:
+`lib/match.ts` runs five explicit stages for every version type:
 
 1. **Normalize** — strips `(feat. …)`, `(Remastered)`, `(Official Video)`,
    punctuation and marketing noise; splits multi-artist strings.
-2. **Query variants** — e.g. `Starboy The Weeknd slowed reverb`,
-   `Starboy slowed + reverb`, `Starboy The Weeknd slowed down`.
+2. **Query variants** — version-specific retrieval queries:
+
+   | Version        | Queries                                                        |
+   | -------------- | -------------------------------------------------------------- |
+   | Slowed + reverb| `… slowed reverb`, `… slowed + reverb`, `… slowed down`         |
+   | Instrumental   | `… instrumental`, `… instrumental version`, `… no vocals`       |
+   | Sped up        | `… sped up`, `… sped up version`, `… nightcore`                  |
+
 3. **Retrieve + score** — candidates from every query are deduped and scored:
 
-   | Signal        | Weight | What it checks                                      |
-   | ------------- | ------ | --------------------------------------------------- |
-   | Title         | 30%    | exact phrase first, then token overlap              |
-   | Artist        | 25%    | artist in title or channel (partial credit)         |
-   | Duration      | 15%    | slowed uploads run ~0.95×–1.5× the original         |
-   | Treatment     | 20%    | requires “slowed” and/or “reverb” evidence          |
-   | Upload quality| 10%    | views, sane length, channel type                    |
+   | Signal         | Weight | What it checks                                      |
+   | -------------- | ------ | --------------------------------------------------- |
+   | Title          | 30%    | exact phrase first, then token overlap              |
+   | Artist         | 25%    | artist in title or channel (partial credit)         |
+   | Duration       | 15%    | version-specific length window                      |
+   | Treatment      | 20%    | explicit evidence of the requested version          |
+   | Upload quality | 10%    | views, sane length, channel type                    |
 
-4. **Reject** — hard blocks for sped up, nightcore, 8D, bass boosted, karaoke,
-   instrumental, cover, reaction, mashup, loops and hour-long uploads.
-5. **Confidence** — `Match` (score ≥ 78 + strong title/artist + slowed + reverb),
-   `Likely` (≥ 58), `Review` (everything else), or no candidates.
+   Each version has its own evidence rules and duration window:
+
+   | Version        | Required evidence                                             | Ideal duration |
+   | -------------- | ------------------------------------------------------------- | -------------- |
+   | Slowed + reverb| “slowed” and/or “reverb”; full weight only when both appear    | 0.95×–1.5×     |
+   | Instrumental   | instrumental, no vocals, off vocal or backing track            | 0.88×–1.12×    |
+   | Sped up        | sped up / speed up; nightcore accepted at a lower weight       | 0.60×–0.95×    |
+
+4. **Reject** — hard blocks for karaoke, covers, reactions, mashups, medleys,
+   loops, hour-long uploads, full albums, live versions, 8D and bass boosted
+   audio. Version-specific rejects keep the treatments apart: the slowed search
+   rejects sped up/nightcore/instrumental results, the instrumental search
+   rejects slowed/sped up/nightcore results, and the sped-up search rejects
+   slowed/instrumental results.
+5. **Confidence** — `Match` (score ≥ 78 + strong title/artist + full treatment
+   evidence), `Likely` (≥ 58), `Review` (everything else), or no candidates.
+   Nightcore-only uploads are accepted as sped up but capped at `Likely`;
+   titles that explicitly say “sped up” can reach `Match`.
 
 Retrieval walks the query variants and stops early once a high-confidence match
-is found. Search results are cached for two weeks at the edge.
+is found. Results are cached per track **and version** for two weeks at the edge
+and in `localStorage`.
 
 ## Architecture
 
 ```
 app/
-  page.tsx              client orchestrator: queue, cache, favorites, exports, shortcuts
+  page.tsx              client orchestrator: queue, per-version cache, favorites, exports, shortcuts
   layout.tsx            metadata + viewport
   globals.css           token-based design system
   api/playlist/route.ts Spotify resolution (API → public embed fallback)
-  api/search/route.ts   per-track YouTube matching
+  api/search/route.ts   per-track YouTube matching (?mode=slowed|instrumental|spedup)
 components/
   Hero / ImportCard     landing, drag-and-drop, paste detection, recents
   PlaylistHeader        artwork, metadata, play-all parts, export menu
+  ModeSwitcher          slowed / instrumental / sped-up selector
   ProgressPanel         progress tracker, ETA, stats, concurrency
   Toolbar               filter chips + deferred search
   TrackRow              result cards, score breakdown, favorites, retry
@@ -73,7 +100,8 @@ components/
 lib/
   spotify.ts            link parsing, anonymous token, API + embed fallbacks
   youtube.ts            innerTube → HTML scrape → Invidious → optional Data API
-  match.ts              normalization, scoring, rejection, confidence
+  match.ts              normalization, version-aware scoring, rejection, confidence
+  modes.ts              version labels, hints and defaults
   client.ts             localStorage caches, library, favorites, exports
   http.ts, types.ts     fetch helpers and shared types
 ```
@@ -83,10 +111,14 @@ Design notes:
 - **Client-driven fan-out** keeps each serverless request short (Vercel Hobby
   caps `maxDuration` at 30s); the client runs 2–6 searches in parallel and
   patches rows as they settle.
+- **Race-safe version switching** aborts the previous batch and ignores late
+  responses, so results never leak between versions.
 - **Layered surfaces** instead of flat cards: base tokens → translucent
   surfaces → inset highlights; `content-visibility` keeps 200+ rows smooth.
-- **No accounts**: library, favorites, recents and the match cache live in
-  `localStorage`, so the app stays free and private.
+- **No accounts**: library, favorites, recents and the per-version match cache
+  live in `localStorage`, so the app stays free and private.
+- Storage keys keep their original `slowedmatch:v1` prefix so libraries and
+  favorites saved before the rename are preserved.
 
 ## Local development
 
@@ -128,16 +160,20 @@ No environment variables are required. For a custom domain or OG image, add
 
 ## Keyboard shortcuts
 
-| Key        | Action                          |
-| ---------- | ------------------------------- |
-| `/`        | Focus search (or import field)  |
-| `J` / `K`  | Move between tracks             |
-| `Enter`    | Play the focused track’s match  |
-| `Esc`      | Close player / clear search     |
+| Key       | Action                         |
+| --------- | ------------------------------ |
+| `/`       | Focus search (or import field) |
+| `J` / `K` | Move between tracks            |
+| `Enter`   | Play the focused track’s match |
+| `Esc`     | Close player / clear search    |
 
 ## Limits
 
 - Playlists are capped at 200 tracks per run; Spotify embeds expose 100.
-- Slowed + reverb uploads don’t exist for every song — those rows show
-  “No slowed version found” with a manual YouTube search link.
+- Version coverage varies by song. A row with no convincing candidate shows
+  “No instrumental version found” (or the relevant version) plus a manual
+  YouTube search link.
+- Instrumental matching requires explicit evidence in the title, so unofficial
+  “no vocals” uploads only appear when they say so.
+- Nightcore is treated as a sped-up variant and labelled honestly.
 - Everything is per-device; there is no sync or account.

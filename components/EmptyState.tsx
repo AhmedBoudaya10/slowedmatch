@@ -8,8 +8,8 @@ const STEPS = [
   },
   {
     n: "02",
-    title: "We do the digging",
-    body: "SlowedMatch searches YouTube, scores every candidate on five signals and keeps only real slowed + reverb uploads.",
+    title: "Pick a version",
+    body: "Slowed + reverb, instrumental or sped up. AltMatch searches each one separately and scores every candidate on five signals.",
   },
   {
     n: "03",
@@ -20,7 +20,7 @@ const STEPS = [
 
 export default function EmptyState() {
   return (
-    <section className="steps" aria-label="How SlowedMatch works">
+    <section className="steps" aria-label="How AltMatch works">
       <div className="steps-head">
         <h2>How it works</h2>
         <p className="muted">Three steps, about ten seconds per playlist.</p>

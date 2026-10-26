@@ -2,11 +2,13 @@
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  MatchMode,
   PlaylistResult,
   Track,
   TrackRowState,
   VideoCandidate,
 } from "@/lib/types";
+import { DEFAULT_MODE, MODES, modeLabel } from "@/lib/modes";
 import {
   copyText,
   download,
@@ -35,6 +37,7 @@ import Hero from "@/components/Hero";
 import LibraryShelf from "@/components/LibraryShelf";
 import ProgressPanel from "@/components/ProgressPanel";
 import PlaylistHeader from "@/components/PlaylistHeader";
+import ModeSwitcher from "@/components/ModeSwitcher";
 import Toolbar, { type Filter } from "@/components/Toolbar";
 import EmptyState from "@/components/EmptyState";
 import Toast from "@/components/Toast";
@@ -48,6 +51,7 @@ import {
 const MAX_TRACKS = 200;
 const DEFAULT_CONCURRENCY = 3;
 const CONCURRENCY_KEY = "slowedmatch:v1:concurrency";
+const MODE_KEY = "slowedmatch:v1:mode";
 const DEMO_URL = "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M";
 const PLAY_QUEUE_SIZE = 50;
 
@@ -57,7 +61,7 @@ function slug(name: string): string {
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "")
-      .slice(0, 60) || "slowedmatch"
+      .slice(0, 60) || "altmatch"
   );
 }
 
@@ -80,10 +84,12 @@ export default function Home() {
   const [library, setLibrary] = useState<SavedEntity[]>([]);
   const [favorites, setFavorites] = useState<string[]>([]);
   const [concurrency, setConcurrency] = useState(DEFAULT_CONCURRENCY);
+  const [mode, setMode] = useState<MatchMode>(DEFAULT_MODE);
 
   const abortRef = useRef<AbortController | null>(null);
   const toastTimer = useRef<number | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
+  const modeRef = useRef<MatchMode>(DEFAULT_MODE);
 
   useEffect(() => {
     const recent = getRecentUrl();
@@ -99,6 +105,14 @@ export default function Home() {
     ) {
       setConcurrency(savedConcurrency);
     }
+
+    const savedMode = window.localStorage.getItem(MODE_KEY);
+    if (savedMode && MODES.some((item) => item.id === savedMode)) {
+      const next = savedMode as MatchMode;
+      setMode(next);
+      modeRef.current = next;
+    }
+
     return () => {
       abortRef.current?.abort();
       if (toastTimer.current) window.clearTimeout(toastTimer.current);
@@ -245,23 +259,52 @@ export default function Home() {
 
   function newSearch() {
     resetResults();
-    window.setTimeout(() => searchRef.current?.focus(), 350);
+    window.setTimeout(
+      () => document.getElementById("playlist-link")?.focus(),
+      350,
+    );
   }
 
-  function patchById(id: string, patch: Partial<TrackRowState>) {
+  function patchById(
+    id: string,
+    patch: Partial<TrackRowState>,
+    forMode: MatchMode,
+  ) {
+    // Ignore late responses from a version the user has already switched away from.
+    if (modeRef.current !== forMode) return;
     setRows((prev) =>
       prev.map((row) => (row.track.id === id ? { ...row, ...patch } : row)),
     );
   }
 
-  async function processTrack(track: Track, signal: AbortSignal) {
-    patchById(track.id, { status: "loading", error: undefined });
+  function rowsFor(result: PlaylistResult, forMode: MatchMode): TrackRowState[] {
+    return result.tracks.slice(0, MAX_TRACKS).map((track) => {
+      const cached = getCachedMatch(track, forMode);
+      if (!cached) return { track, status: "pending" };
+      return {
+        track,
+        status: "done",
+        candidates: cached.candidates,
+        query: cached.query,
+        via: cached.via,
+        cached: true,
+      };
+    });
+  }
+
+  async function processTrack(
+    track: Track,
+    signal: AbortSignal,
+    forMode: MatchMode,
+  ) {
+    patchById(track.id, { status: "loading", error: undefined }, forMode);
 
     try {
       const params = new URLSearchParams({
         song: track.title,
         artist: track.artist,
         dur: String(Math.round((track.durationMs ?? 0) / 1000)),
+        mode: forMode,
       });
 
       const res = await fetch(`/api/search?${params.toString()}`, { signal });
@@ -273,36 +316,48 @@ export default function Home() {
         ? data.candidates
         : [];
 
-      setCachedMatch(track, {
+      setCachedMatch(track, forMode, {
         candidates,
         query: data.query ?? "",
         via: data.via ?? "",
       });
 
-      patchById(track.id, {
-        status: "done",
-        candidates,
-        query: data.query,
-        via: data.via,
-        error: undefined,
-      });
+      patchById(
+        track.id,
+        {
+          status: "done",
+          candidates,
+          query: data.query,
+          via: data.via,
+          error: undefined,
+        },
+        forMode,
+      );
     } catch (err) {
       if (signal.aborted) return;
-      patchById(track.id, {
-        status: "error",
-        error: (err as Error).message || "Search failed.",
-      });
+      patchById(
+        track.id,
+        {
+          status: "error",
+          error: (err as Error).message || "Search failed.",
+        },
+        forMode,
+      );
     }
   }
 
-  async function runQueue(tracks: Track[], signal: AbortSignal) {
+  async function runQueue(
+    tracks: Track[],
+    signal: AbortSignal,
+    forMode: MatchMode,
+  ) {
     let cursor = 0;
 
     const worker = async () => {
       while (cursor < tracks.length) {
         if (signal.aborted) return;
         const track = tracks[cursor++];
-        await processTrack(track, signal);
+        await processTrack(track, signal, forMode);
       }
     };
 
@@ -310,7 +365,7 @@ export default function Home() {
       Array.from({ length: Math.min(concurrency, tracks.length) }, worker),
     );
 
-    if (!signal.aborted) setRunning(false);
+    if (!signal.aborted && modeRef.current === forMode) setRunning(false);
   }
 
   async function runPlaylist(input: string) {
@@ -323,6 +378,7 @@ export default function Home() {
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
+    const runMode = modeRef.current;
 
     setError(null);
     setPlaylist(null);
@@ -368,19 +424,7 @@ export default function Home() {
       });
       setLibrary(getLibrary());
 
-      const capped = result.tracks.slice(0, MAX_TRACKS);
-      const initial: TrackRowState[] = capped.map((track) => {
-        const cached = getCachedMatch(track);
-        if (!cached) return { track, status: "pending" };
-        return {
-          track,
-          status: "done",
-          candidates: cached.candidates,
-          query: cached.query,
-          via: cached.via,
-          cached: true,
-        };
-      });
+      const initial = rowsFor(result, runMode);
 
       setRows(initial);
       setResolving(false);
@@ -391,11 +435,11 @@ export default function Home() {
 
       if (!pending.length) {
         setRunning(false);
-        notify("Loaded from cache");
+        notify(`${modeLabel(runMode)} loaded from cache`);
         return;
       }
 
-      await runQueue(pending, controller.signal);
+      await runQueue(pending, controller.signal, runMode);
     } catch (err) {
       if (controller.signal.aborted) return;
       setError((err as Error).message || "Something went wrong.");
@@ -425,7 +469,46 @@ export default function Home() {
     notify("Search stopped — resume any time");
   }
 
+  function switchMode(next: MatchMode) {
+    if (!playlist || next === modeRef.current) return;
+
+    abortRef.current?.abort();
+    modeRef.current = next;
+    setMode(next);
+    try {
+      window.localStorage.setItem(MODE_KEY, next);
+    } catch {
+      /* storage may be unavailable in private mode */
+    }
+
+    setRunning(false);
+    setExpanded(new Set());
+    setFilter("all");
+    setQuery("");
+    setError(null);
+
+    const initial = rowsFor(playlist, next);
+    setRows(initial);
+
+    const pending = initial
+      .filter((row) => row.status === "pending")
+      .map((row) => row.track);
+
+    if (!pending.length) {
+      notify(`${modeLabel(next)} loaded from cache`);
+      return;
+    }
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setRunning(true);
+    setStartedAt(Date.now());
+    setNowTick(Date.now());
+    void runQueue(pending, controller.signal, next);
+  }
+
   function resumeSearch() {
+    const forMode = modeRef.current;
     const controller = new AbortController();
     abortRef.current = controller;
     setRunning(true);
@@ -436,14 +519,15 @@ export default function Home() {
       .filter((row) => row.status === "pending" || row.status === "error")
       .map((row) => row.track);
 
-    void runQueue(pending, controller.signal);
+    void runQueue(pending, controller.signal, forMode);
   }
 
   function retryTrack(track: Track) {
+    const forMode = modeRef.current;
     const controller = new AbortController();
     abortRef.current = controller;
     setRunning(true);
-    void runQueue([track], controller.signal);
+    void runQueue([track], controller.signal, forMode);
   }
 
   const playNext = useCallback(() => {
@@ -493,24 +577,32 @@ export default function Home() {
 
   function exportCsv() {
     if (!playlist) return;
-    download(`${slug(playlist.name)}-slowedmatch.csv`, toCsv(rows), "text/csv;charset=utf-8");
-    notify(`CSV exported · ${rows.length} tracks`);
+    download(
+      `${slug(playlist.name)}-${mode}.csv`,
+      toCsv(rows, mode),
+      "text/csv;charset=utf-8",
+    );
+    notify(`CSV exported · ${modeLabel(mode).toLowerCase()} · ${rows.length} tracks`);
   }
 
   function exportJson() {
     if (!playlist) return;
     download(
-      `${slug(playlist.name)}-slowedmatch.json`,
-      toJson(playlist, rows),
+      `${slug(playlist.name)}-${mode}.json`,
+      toJson(playlist, rows, mode),
       "application/json",
     );
-    notify("JSON exported");
+    notify(`${modeLabel(mode)} JSON exported`);
   }
 
   function exportM3u() {
     if (!playlist) return;
-    download(`${slug(playlist.name)}.m3u`, toM3u(rows), "audio/x-mpegurl");
-    notify("M3U playlist exported");
+    download(
+      `${slug(playlist.name)}-${mode}.m3u`,
+      toM3u(rows),
+      "audio/x-mpegurl",
+    );
+    notify(`${modeLabel(mode)} M3U exported`);
   }
 
   async function copyLinks() {
@@ -523,7 +615,11 @@ export default function Home() {
       return;
     }
     const ok = await copyText(links.join("\n"));
-    notify(ok ? `${links.length} YouTube links copied` : "Couldn't copy links");
+    notify(
+      ok
+        ? `${links.length} ${modeLabel(mode).toLowerCase()} links copied`
+        : "Couldn't copy links",
+    );
   }
 
   /* Keyboard shortcuts: / search, J/K navigate, Enter play, Esc close */
@@ -598,9 +694,9 @@ export default function Home() {
             <span className="brand-mark" aria-hidden="true">
               <WaveformIcon />
             </span>
-            <span className="brand-name">SlowedMatch</span>
+            <span className="brand-name">AltMatch</span>
           </span>
-          <span className="topbar-note">Spotify → slowed + reverb</span>
+          <span className="topbar-note">Spotify → slowed · instrumental · sped up</span>
         </header>
 
         <main>
@@ -684,6 +780,8 @@ export default function Home() {
                 onNewSearch={newSearch}
               />
 
+              <ModeSwitcher mode={mode} running={running} onChange={switchMode} />
+
               {rows.length > 0 && (
                 <ProgressPanel
                   settled={settled}
@@ -693,6 +791,7 @@ export default function Home() {
                   running={running}
                   pending={pendingCount}
                   stats={stats}
+                  mode={mode}
                   concurrency={concurrency}
                   onConcurrency={changeConcurrency}
                   onStop={stopSearch}
@@ -705,7 +804,7 @@ export default function Home() {
                     const controller = new AbortController();
                     abortRef.current = controller;
                     setRunning(true);
-                    void runQueue(failed, controller.signal);
+                    void runQueue(failed, controller.signal, modeRef.current);
                   }}
                 />
               )}
@@ -732,6 +831,7 @@ export default function Home() {
                       expanded={expanded.has(row.track.id)}
                       playingId={player?.video.videoId}
                       favorites={favoriteSet}
+                      mode={mode}
                       onToggle={() => toggleRow(row.track.id)}
                       onPlay={(video) => playRow(row.track, video)}
                       onRetry={() => retryRow(row.track)}
@@ -763,8 +863,8 @@ export default function Home() {
         </main>
 
         <footer className="footer">
-          <span>SlowedMatch links out to YouTube. Nothing is downloaded or re-hosted.</span>
-          <span className="footer-dim">Personal use · built for slow nights</span>
+          <span>AltMatch links out to YouTube. Nothing is downloaded or re-hosted.</span>
+          <span className="footer-dim">Personal use · every version, one place</span>
         </footer>
       </div>
 

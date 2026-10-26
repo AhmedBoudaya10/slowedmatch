@@ -2,7 +2,8 @@
 
 /* eslint-disable @next/next/no-img-element */
 
-import type { TrackRowState, VideoCandidate } from "@/lib/types";
+import type { MatchMode, TrackRowState, VideoCandidate } from "@/lib/types";
+import { modeLabel } from "@/lib/modes";
 import { formatClock, formatDuration, formatViews, searchUrl, watchUrl } from "@/lib/client";
 import { ExternalIcon, HeartIcon, PauseIcon, PlayIcon } from "./Icons";
 
@@ -141,6 +142,7 @@ export default function TrackRow({
   expanded,
   playingId,
   favorites,
+  mode,
   onToggle,
   onPlay,
   onRetry,
@@ -151,6 +153,7 @@ export default function TrackRow({
   expanded: boolean;
   playingId?: string;
   favorites: Set<string>;
+  mode: MatchMode;
   onToggle: () => void;
   onPlay: (video: VideoCandidate) => void;
   onRetry: () => void;
@@ -231,10 +234,15 @@ export default function TrackRow({
         {row.status === "done" && !best && (
           <div className="match-empty">
             <div className="me-text">
-              <strong>No slowed version found</strong>
-              <span>Nothing convincing on YouTube.</span>
+              <strong>No {modeLabel(mode).toLowerCase()} version found</strong>
+              <span>Nothing convincing for this version on YouTube.</span>
             </div>
-            <a className="btn-mini" href={searchUrl(track)} target="_blank" rel="noreferrer noopener">
+            <a
+              className="btn-mini"
+              href={searchUrl(track, mode)}
+              target="_blank"
+              rel="noreferrer noopener"
+            >
               Search <ExternalIcon size={12} />
             </a>
           </div>

@@ -1,6 +1,7 @@
 import { searchYouTube } from "./youtube";
 import type {
   Confidence,
+  MatchMode,
   RawVideo,
   SearchResponse,
   Track,
@@ -19,16 +20,11 @@ const STOP_WORDS = new Set([
   "clean", "album", "single", "deluxe", "bonus", "track", "from",
 ]);
 
-/** Reject results that are clearly a different treatment of the song. */
-const HARD_BLOCK: RegExp[] = [
-  /\bsped\s*up\b/,
-  /\bspeed\s*up\b/,
-  /\bnightcore\b/,
-  /\bdaycore\b/,
+/** Reject results that are a different kind of upload in every mode. */
+const COMMON_BLOCK: RegExp[] = [
   /\b8\s*d\b/,
   /\bbass\s*boost(ed)?\b/,
   /\bkaraoke\b/,
-  /\binstrumental\b/,
   /\bcover\b/,
   /\breaction\b/,
   /\bmashup\b/,
@@ -39,6 +35,33 @@ const HARD_BLOCK: RegExp[] = [
   /\blive\s+(at|from|in)\b/,
   /\bfull\s+album\b/,
 ];
+
+/** Treatments that are valid in one mode but wrong for another. */
+const MODE_BLOCK: Record<MatchMode, RegExp[]> = {
+  slowed: [
+    /\bsped\s*up\b/,
+    /\bspeed\s*up\b/,
+    /\bspedup\b/,
+    /\bspeedup\b/,
+    /\bnightcore\b/,
+    /\bdaycore\b/,
+    /\binstrumental\b/,
+  ],
+  instrumental: [
+    /\bsped\s*up\b/,
+    /\bspeed\s*up\b/,
+    /\bspedup\b/,
+    /\bspeedup\b/,
+    /\bnightcore\b/,
+    /\bdaycore\b/,
+    /\bslowed\b/,
+  ],
+  spedup: [
+    /\bslowed\b/,
+    /\bdaycore\b/,
+    /\binstrumental\b/,
+  ],
+};
 
 export function norm(input: string): string {
   return input
@@ -107,20 +130,38 @@ export function normalizeTrack(track: Track): NormalizedTrack {
 }
 
 /* ------------------------------------------------------------------ */
-/* Query variants                                                     */
+/* Stage 2 — query variants, per version type                         */
 /* ------------------------------------------------------------------ */
 
-export function buildQueries(track: Track): string[] {
+export function buildQueries(track: Track, mode: MatchMode = "slowed"): string[] {
   const { coreTitle, primaryArtist } = normalizeTrack(track);
   const title = coreTitle || track.title;
+  const artist = primaryArtist ? ` ${primaryArtist}` : "";
 
-  const queries = [
-    `${title} ${primaryArtist} slowed reverb`,
-    `${title} slowed + reverb`,
-    `${title} ${primaryArtist} slowed down`,
+  const variants =
+    mode === "slowed"
+      ? [
+          `${title}${artist} slowed reverb`,
+          `${title} slowed + reverb`,
+          `${title}${artist} slowed down`,
+        ]
+      : mode === "instrumental"
+        ? [
+            `${title}${artist} instrumental`,
+            `${title} instrumental version`,
+            `${title}${artist} no vocals`,
+          ]
+        : [
+            `${title}${artist} sped up`,
+            `${title} sped up version`,
+            `${title}${artist} nightcore`,
+          ];
+
+  return [
+    ...new Set(
+      variants.map((q) => q.replace(/\s{2,}/g, " ").trim()).filter(Boolean),
+    ),
   ];
-
-  return [...new Set(queries.map((q) => q.replace(/\s{2,}/g, " ").trim()).filter(Boolean))];
 }
 
 /* ------------------------------------------------------------------ */
@@ -199,31 +240,87 @@ function artistSignal(normalized: NormalizedTrack, videoTitle: string, channel: 
   return best;
 }
 
-function durationSignal(trackSeconds: number, videoSeconds: number | null): number {
+function durationSignal(
+  trackSeconds: number,
+  videoSeconds: number | null,
+  mode: MatchMode,
+): number {
   if (!trackSeconds || !videoSeconds) return 0.5;
 
   const ratio = videoSeconds / trackSeconds;
 
-  // Slowed versions run longer than the original: 0.95×–1.5× is ideal.
-  if (ratio >= 0.95 && ratio <= 1.5) return 1;
-  if (ratio >= 0.85 && ratio <= 1.8) return 0.7;
-  if (ratio >= 0.7 && ratio <= 2.2) return 0.35;
-  if (ratio > 2.2) return 0;
-  return 0.15;
+  if (mode === "slowed") {
+    // Slowed versions run longer than the original: 0.95×–1.5× is ideal.
+    if (ratio >= 0.95 && ratio <= 1.5) return 1;
+    if (ratio >= 0.85 && ratio <= 1.8) return 0.7;
+    if (ratio >= 0.7 && ratio <= 2.2) return 0.35;
+    if (ratio > 2.2) return 0;
+    return 0.15;
+  }
+
+  if (mode === "instrumental") {
+    // Instrumentals keep the arrangement length.
+    if (ratio >= 0.88 && ratio <= 1.12) return 1;
+    if (ratio >= 0.75 && ratio <= 1.3) return 0.7;
+    if (ratio >= 0.55 && ratio <= 1.5) return 0.3;
+    return 0;
+  }
+
+  // Sped up versions run ~0.6×–0.95× of the original.
+  if (ratio >= 0.6 && ratio <= 0.95) return 1;
+  if (ratio >= 0.5 && ratio <= 1.03) return 0.7;
+  if (ratio >= 0.4 && ratio <= 1.15) return 0.3;
+  return 0;
 }
 
-function evidenceSignal(videoTitle: string): { value: number; slowed: boolean; reverb: boolean } {
+type Evidence = { value: number; tags: string[] };
+
+function evidenceSignal(videoTitle: string, mode: MatchMode): Evidence {
   const title = norm(videoTitle);
-  const slowed = /\bslow(?:ed|ing)?\b/.test(title) || /\bslowed\s*down\b/.test(title);
-  const reverb = /\breverb/.test(title);
 
-  if (slowed && reverb) return { value: 1, slowed, reverb };
-  if (slowed) return { value: 0.55, slowed, reverb };
-  if (reverb) return { value: 0.4, slowed, reverb };
-  return { value: 0, slowed, reverb };
+  if (mode === "slowed") {
+    const slowed = /\bslowed\b/.test(title);
+    const reverb = /\breverb/.test(title);
+
+    if (slowed && reverb) return { value: 1, tags: ["slowed", "reverb"] };
+    if (slowed) return { value: 0.55, tags: ["slowed"] };
+    if (reverb) return { value: 0.4, tags: ["reverb"] };
+    return { value: 0, tags: [] };
+  }
+
+  if (mode === "instrumental") {
+    if (
+      /\bno\s+vocals?\b|\boff\s*vocal\b|\bwithout\s+vocals?\b|\bbacking\s+track\b/.test(
+        title,
+      )
+    ) {
+      return { value: 1, tags: ["no vocals"] };
+    }
+    if (/\binstrumental\b/.test(title)) {
+      return { value: 1, tags: ["instrumental"] };
+    }
+    if (/\binst\b/.test(title)) return { value: 0.8, tags: ["instrumental"] };
+    return { value: 0, tags: [] };
+  }
+
+  if (
+    /\bsped\s*up\b|\bspeed\s*up\b|\bspedup\b|\bspeedup\b|\baccelerated\b/.test(title)
+  ) {
+    return { value: 1, tags: ["sped up"] };
+  }
+  if (/\bnightcore\b/.test(title)) {
+    return { value: 0.7, tags: ["nightcore"] };
+  }
+  return { value: 0, tags: [] };
 }
 
-function qualitySignal(video: RawVideo, channel: string): number {
+const CHANNEL_BOOST: Record<MatchMode, RegExp> = {
+  slowed: /\bslowed\b|\breverb\b|\baesthetic\b/,
+  instrumental: /\binstrumental\b|\bbacking\s*track\b|\bkaraoke\b/,
+  spedup: /\bsped\s*up\b|\bspedup\b|\bspeed\s*up\b|\bnightcore\b/,
+};
+
+function qualitySignal(video: RawVideo, channel: string, mode: MatchMode): number {
   let value = 0.4;
 
   if (video.views) value += Math.min(0.4, Math.log10(video.views + 1) / 16);
@@ -233,27 +330,41 @@ function qualitySignal(video: RawVideo, channel: string): number {
   }
 
   const channelNorm = norm(channel);
-  if (/\btopic\b|\bvevo\b/.test(channelNorm)) value -= 0.2;
-  if (/\bslowed\b|\breverb\b|\baesthetic\b/.test(channelNorm)) value += 0.1;
+  // Official "Topic" channels are a negative signal for edits, but a positive
+  // one for instrumentals — those uploads are usually the cleanest source.
+  if (mode !== "instrumental" && /\btopic\b|\bvevo\b/.test(channelNorm)) {
+    value -= 0.2;
+  }
+  if (CHANNEL_BOOST[mode].test(channelNorm)) value += 0.1;
 
   return Math.max(0, Math.min(1, value));
 }
 
-export function scoreVideo(track: Track, video: RawVideo): VideoCandidate | null {
+export function scoreVideo(
+  track: Track,
+  video: RawVideo,
+  mode: MatchMode = "slowed",
+): VideoCandidate | null {
   const normalized = normalizeTrack(track);
   const videoTitle = norm(video.title);
 
-  if (HARD_BLOCK.some((pattern) => pattern.test(videoTitle))) return null;
+  if (
+    COMMON_BLOCK.some((pattern) => pattern.test(videoTitle)) ||
+    MODE_BLOCK[mode].some((pattern) => pattern.test(videoTitle))
+  ) {
+    return null;
+  }
 
+  const evidence = evidenceSignal(video.title, mode);
   const signals: Signals = {
     title: titleSignal(normalized.title, video.title),
     artist: artistSignal(normalized, video.title, video.channel),
-    duration: durationSignal(normalized.durationSec, video.durationSec),
-    evidence: evidenceSignal(video.title).value,
-    quality: qualitySignal(video, video.channel),
+    duration: durationSignal(normalized.durationSec, video.durationSec, mode),
+    evidence: evidence.value,
+    quality: qualitySignal(video, video.channel, mode),
   };
 
-  // A candidate must at least mention the song and a slowed/reverb treatment.
+  // A candidate must mention the song and carry evidence of the chosen version.
   if (signals.title < 0.34) return null;
   if (signals.evidence === 0) return null;
 
@@ -266,22 +377,32 @@ export function scoreVideo(track: Track, video: RawVideo): VideoCandidate | null
 
   const score = Math.round(weighted * 1000) / 10; // 0–100, one decimal
 
-  const { slowed, reverb } = evidenceSignal(video.title);
   const reasons: string[] = [];
   if (signals.title === 1) reasons.push("exact title");
   else if (signals.title >= 0.7) reasons.push("strong title");
   else reasons.push("partial title");
   if (signals.artist >= 0.9) reasons.push("artist match");
   else if (signals.artist >= 0.5) reasons.push("artist in channel");
-  if (slowed) reasons.push("slowed");
-  if (reverb) reasons.push("reverb");
+  reasons.push(...evidence.tags);
+
   if (normalized.durationSec && video.durationSec) {
     const ratio = video.durationSec / normalized.durationSec;
-    if (ratio >= 0.95 && ratio <= 1.5) reasons.push(`length fits ${ratio.toFixed(2)}×`);
+    const ideal =
+      mode === "slowed"
+        ? ratio >= 0.95 && ratio <= 1.5
+        : mode === "instrumental"
+          ? ratio >= 0.88 && ratio <= 1.12
+          : ratio >= 0.6 && ratio <= 0.95;
+    if (ideal) reasons.push(`length fits ${ratio.toFixed(2)}×`);
   }
 
+  // Nightcore is accepted as sped up, but flagged "Likely" rather than "Match".
+  const highEvidence = mode === "spedup" ? 0.85 : 1;
   const confidence: Confidence =
-    score >= 78 && signals.title >= 0.85 && slowed && reverb && signals.artist >= 0.5
+    score >= 78 &&
+    signals.title >= 0.85 &&
+    signals.artist >= 0.5 &&
+    signals.evidence >= highEvidence
       ? "high"
       : score >= 58 && signals.title >= 0.6
         ? "medium"
@@ -303,14 +424,17 @@ export function scoreVideo(track: Track, video: RawVideo): VideoCandidate | null
 }
 
 /* ------------------------------------------------------------------ */
-/* Stages 2 + 4 + 5 — retrieval, rejection, confidence                 */
+/* Stages 4 + 5 — retrieval, rejection, confidence                     */
 /* ------------------------------------------------------------------ */
 
 const MAX_QUERIES = 3;
 const HIGH_CONFIDENCE_STOP = 80;
 
-export async function findMatches(track: Track): Promise<SearchResponse> {
-  const queries = buildQueries(track);
+export async function findMatches(
+  track: Track,
+  mode: MatchMode = "slowed",
+): Promise<SearchResponse> {
+  const queries = buildQueries(track, mode);
   const pool = new Map<string, VideoCandidate>();
   let via = "none";
 
@@ -319,7 +443,7 @@ export async function findMatches(track: Track): Promise<SearchResponse> {
     if (outcome.videos.length) via = outcome.via;
 
     for (const video of outcome.videos) {
-      const candidate = scoreVideo(track, video);
+      const candidate = scoreVideo(track, video, mode);
       if (!candidate) continue;
       const existing = pool.get(candidate.videoId);
       if (!existing || candidate.score > existing.score) {
@@ -336,5 +460,5 @@ export async function findMatches(track: Track): Promise<SearchResponse> {
     .sort((a, b) => b.score - a.score)
     .slice(0, 4);
 
-  return { query: queries[0], via, candidates };
+  return { query: queries[0], via, mode, candidates };
 }

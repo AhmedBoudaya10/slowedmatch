@@ -2,14 +2,14 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "SlowedMatch — slowed + reverb versions of your Spotify playlist",
+  title: "AltMatch — slowed, instrumental & sped-up versions of your playlist",
   description:
-    "Paste a public Spotify playlist and find a slowed + reverb version of every track on YouTube. Free, no login.",
-  applicationName: "SlowedMatch",
+    "Paste a public Spotify playlist and get slowed + reverb, instrumental and sped-up versions of every track on YouTube. Scored, comparable, free, no login.",
+  applicationName: "AltMatch",
   openGraph: {
-    title: "SlowedMatch",
+    title: "AltMatch",
     description:
-      "Your Spotify playlist, slowed and reverbed. Free, no login, no downloads.",
+      "Your playlist, every version: slowed + reverb, instrumental and sped up. Free, no login, no downloads.",
     type: "website",
   },
 };

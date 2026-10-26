@@ -1,5 +1,7 @@
 "use client";
 
+import type { MatchMode } from "@/lib/types";
+import { modeLabel } from "@/lib/modes";
 import { RefreshIcon } from "./Icons";
 
 export type SearchStats = {
@@ -27,6 +29,7 @@ export default function ProgressPanel({
   running,
   pending,
   stats,
+  mode,
   concurrency,
   onConcurrency,
   onStop,
@@ -40,6 +43,7 @@ export default function ProgressPanel({
   running: boolean;
   pending: number;
   stats: SearchStats;
+  mode: MatchMode;
   concurrency: number;
   onConcurrency: (value: number) => void;
   onStop: () => void;
@@ -47,13 +51,18 @@ export default function ProgressPanel({
   onRetryFailed: () => void;
 }) {
   const finished = settled >= total && total > 0;
+  const version = modeLabel(mode).toLowerCase();
 
   return (
     <section className="progress" aria-label="Search progress">
       <div className="progress-top">
         <div className="progress-copy">
           <span className="eyebrow">
-            {finished ? "Search complete" : running ? "Searching YouTube" : "Search paused"}
+            {finished
+              ? `${modeLabel(mode)} search complete`
+              : running
+                ? `Searching ${version} versions`
+                : `${modeLabel(mode)} search paused`}
           </span>
           <strong className="progress-count">
             {settled}
