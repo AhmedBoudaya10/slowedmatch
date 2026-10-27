@@ -23,8 +23,8 @@ videos.
   50-video parts because YouTube silently truncates longer queues.
 - **Favorites** — heart any match; stored locally per device and filterable with
   the `Saved` chip.
-- **Library** — recent playlists/albums/artists are saved on device, with
-  pin-to-top and one-tap re-run.
+- **Library** — every opened playlist, album or artist stays in a sticky nav bar.
+  Pin items to the front, remove them, or reopen one with a tap. Saved on device.
 - **Export** — CSV, JSON, M3U, or copy all YouTube links to the clipboard. The
   exports record which version they contain.
 - **Resumable batch search** — concurrency 2–6, per-track retry, stop/resume, and
@@ -89,14 +89,15 @@ app/
   api/playlist/route.ts Spotify resolution (API → public embed fallback)
   api/search/route.ts   per-track YouTube matching (?mode=slowed|instrumental|spedup)
 components/
-  Hero / ImportCard     landing, drag-and-drop, paste detection, recents
+  Hero / ImportCard     landing, drag-and-drop, paste detection
   PlaylistHeader        artwork, metadata, play-all parts, export menu
   ModeSwitcher          slowed / instrumental / sped-up selector
   ProgressPanel         progress tracker, ETA, stats, concurrency
   Toolbar               filter chips + deferred search
   TrackRow              result cards, score breakdown, favorites, retry
   MiniPlayer            YouTube IFrame API player + auto-advance
-  LibraryShelf, EmptyState, Toast, Icons
+  LibraryNav            sticky saved-library bar with pin, remove and reopen
+  EmptyState, Toast, Icons
 lib/
   spotify.ts            link parsing, anonymous token, API + embed fallbacks
   youtube.ts            innerTube → HTML scrape → Invidious → optional Data API

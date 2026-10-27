@@ -1,6 +1,5 @@
 "use client";
 
-import type { SavedEntity } from "@/lib/client";
 import ImportCard from "./ImportCard";
 
 export default function Hero({
@@ -12,8 +11,6 @@ export default function Hero({
   busy,
   resolving,
   running,
-  recents,
-  onPickRecent,
 }: {
   compact: boolean;
   url: string;
@@ -23,8 +20,6 @@ export default function Hero({
   busy: boolean;
   resolving: boolean;
   running: boolean;
-  recents: SavedEntity[];
-  onPickRecent: (entity: SavedEntity) => void;
 }) {
   return (
     <section className={`hero${compact ? " compact" : ""}`}>
@@ -61,8 +56,6 @@ export default function Hero({
         busy={busy}
         resolving={resolving}
         running={running}
-        recents={compact ? [] : recents}
-        onPickRecent={onPickRecent}
       />
     </section>
   );

@@ -112,11 +112,20 @@ export type SavedEntity = {
 };
 
 const LIBRARY_KEY = `${NS}:library`;
-const LIBRARY_MAX = 24;
+const LIBRARY_MAX = 100;
 
 export function getLibrary(): SavedEntity[] {
   const list = read<SavedEntity[]>(LIBRARY_KEY);
   return Array.isArray(list) ? list : [];
+}
+
+function trimLibrary(list: SavedEntity[]): SavedEntity[] {
+  if (list.length <= LIBRARY_MAX) return list;
+
+  // Pinned items are never evicted just because newer searches came in.
+  const pinned = list.filter((item) => item.pinned);
+  const rest = list.filter((item) => !item.pinned);
+  return [...pinned, ...rest].slice(0, LIBRARY_MAX);
 }
 
 function findEntityId(url: string): string {
@@ -127,14 +136,16 @@ function findEntityId(url: string): string {
 export function saveToLibrary(
   entity: Omit<SavedEntity, "id" | "at"> & { id?: string },
 ): void {
+  const existing = getLibrary();
   const entry: SavedEntity = {
     ...entity,
     id: entity.id || findEntityId(entity.url),
     at: Date.now(),
   };
-  const list = getLibrary().filter((item) => item.id !== entry.id);
-  list.unshift(entry);
-  write(LIBRARY_KEY, list.slice(0, LIBRARY_MAX));
+  const previous = existing.find((item) => item.id === entry.id);
+  const list = existing.filter((item) => item.id !== entry.id);
+  list.unshift({ ...entry, pinned: previous?.pinned ?? entry.pinned });
+  write(LIBRARY_KEY, trimLibrary(list));
 }
 
 export function removeFromLibrary(id: string): SavedEntity[] {

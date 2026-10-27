@@ -1,7 +1,6 @@
 "use client";
 
 import { useRef, useState } from "react";
-import type { SavedEntity } from "@/lib/client";
 import { SearchIcon } from "./Icons";
 
 const SPOTIFY_RE = /open\.spotify\.com\/(?:intl-[a-z]{2,5}\/)?(playlist|album|track|artist)\//i;
@@ -19,8 +18,6 @@ export default function ImportCard({
   busy,
   resolving,
   running,
-  recents,
-  onPickRecent,
 }: {
   url: string;
   onUrlChange: (value: string) => void;
@@ -29,8 +26,6 @@ export default function ImportCard({
   busy: boolean;
   resolving: boolean;
   running: boolean;
-  recents: SavedEntity[];
-  onPickRecent: (entity: SavedEntity) => void;
 }) {
   const [drag, setDrag] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -112,29 +107,6 @@ export default function ImportCard({
           · up to 200 tracks
         </span>
       </div>
-
-      {recents.length > 0 && (
-        <div className="recent-row" aria-label="Recent searches">
-          <span className="recent-label">Recent</span>
-          {recents.slice(0, 4).map((entity) => (
-            <button
-              key={entity.id}
-              type="button"
-              className="recent-chip"
-              onClick={() => onPickRecent(entity)}
-              disabled={busy}
-              title={entity.name}
-            >
-              {entity.cover ? (
-                <img src={entity.cover} alt="" width={18} height={18} loading="lazy" />
-              ) : (
-                <span className="recent-dot" aria-hidden="true" />
-              )}
-              <span>{entity.name}</span>
-            </button>
-          ))}
-        </div>
-      )}
 
       {drag && (
         <div className="drop-overlay" aria-hidden="true">

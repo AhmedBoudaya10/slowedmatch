@@ -34,7 +34,7 @@ import {
 import TrackRow from "@/components/TrackRow";
 import MiniPlayer from "@/components/MiniPlayer";
 import Hero from "@/components/Hero";
-import LibraryShelf from "@/components/LibraryShelf";
+import LibraryNav from "@/components/LibraryNav";
 import ProgressPanel from "@/components/ProgressPanel";
 import PlaylistHeader from "@/components/PlaylistHeader";
 import ModeSwitcher from "@/components/ModeSwitcher";
@@ -241,7 +241,18 @@ export default function Home() {
     return parts;
   }, [matchedIds]);
 
-  const recentItems = useMemo(() => library.slice(0, 5), [library]);
+  const activeEntityId = playlist ? `${playlist.kind}:${playlist.id}` : null;
+
+  function scrollToTop() {
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    window.scrollTo({ top: 0, behavior: reduced ? "auto" : "smooth" });
+  }
+
+  function openSaved(entity: SavedEntity) {
+    scrollToTop();
+    if (entity.id === activeEntityId) return;
+    void runPlaylist(entity.url);
+  }
 
   function resetResults() {
     abortRef.current?.abort();
@@ -254,7 +265,7 @@ export default function Home() {
     setError(null);
     setResolving(false);
     setRunning(false);
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    scrollToTop();
   }
 
   function newSearch() {
@@ -699,6 +710,17 @@ export default function Home() {
           <span className="topbar-note">Spotify → slowed · instrumental · sped up</span>
         </header>
 
+        <LibraryNav
+          items={library}
+          activeId={activeEntityId}
+          onOpen={openSaved}
+          onTogglePin={(id) => setLibrary(togglePin(id))}
+          onRemove={(entity) => {
+            setLibrary(removeFromLibrary(entity.id));
+            notify(`Removed “${entity.name}”`);
+          }}
+        />
+
         <main>
           <Hero
             compact={Boolean(playlist) || resolving}
@@ -709,22 +731,7 @@ export default function Home() {
             busy={resolving || running}
             resolving={resolving}
             running={running}
-            recents={recentItems}
-            onPickRecent={(entity) => void runPlaylist(entity.url)}
           />
-
-          {!playlist && !resolving && (
-            <LibraryShelf
-              items={library}
-              disabled={resolving || running}
-              onOpen={(entity) => void runPlaylist(entity.url)}
-              onTogglePin={(id) => setLibrary(togglePin(id))}
-              onRemove={(entity) => {
-                setLibrary(removeFromLibrary(entity.id));
-                notify(`Removed “${entity.name}”`);
-              }}
-            />
-          )}
 
           {error && (
             <div className="alert" role="alert">
